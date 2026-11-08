@@ -69,7 +69,7 @@
 
   function field(spec) {
     const el = document.createElement("div");
-    el.className = "field" + (spec.type === "check" ? " check" : "") + (spec.type === "range" ? " ranged" : "");
+    el.className = "field" + (spec.type === "check" ? " check" : "") + (spec.type === "range" ? " ranged" : "") + (spec.wide ? " wide" : "");
     const id = "f_" + spec.path.replace(/\./g, "_");
     const val = get(spec.path);
     const changed = (v) => { set(spec.path, v); (spec.after || (() => {}))(v); NEXT[spec.on || "paths"](); save(); };
@@ -195,7 +195,7 @@
       return;
     }
     const t = state.trace, specs = [
-      { path: "trace.mode", label: "Mode", type: "seg", options: [["bw", "b&w"], ["gray", "grayscale"], ["colour", "colour"]], on: "stamp",
+      { path: "trace.mode", label: "Mode", type: "seg", wide: true, options: [["bw", "b&w"], ["gray", "grayscale"], ["colour", "colour"]], on: "stamp",
         after: () => { renderTransform(); levelsChanged(); } },
     ];
     if (t.mode === "bw") {
@@ -381,7 +381,7 @@
   }
 
   // ---------------------------------------------------------------- pipeline
-  let src = null, srcName = "Sample: fern UV texture";
+  let src = null, srcName = "";
   let grid = null, base = null, lv = null, lvCanvas = null, presentLevels = 0;
   let fields = {}, pathCache = {}, result = null, error = null, genToken = 0, stale = true;
 
@@ -392,6 +392,8 @@
     $("imgName").textContent = name;
     $("imgInfo").textContent = `${img.width} × ${img.height} px`;
     $("thumb").src = img instanceof HTMLCanvasElement ? img.toDataURL("image/png") : img.src;
+    $("thumb").hidden = false;
+    $("emptyState").hidden = true;
     onSize();
   }
 
@@ -518,7 +520,8 @@
     const canvas = $("view");
     $("pathControls").hidden = view !== "paths";
     $("legend").hidden = view === "original";
-    if (view === "original") { if (src) DH.preview.fitImage(canvas, src, 14); return; }
+    if (!src) { const g = canvas.getContext("2d"); g.clearRect(0, 0, canvas.width, canvas.height); return; }
+    if (view === "original") { DH.preview.fitImage(canvas, src, 14); return; }
     if (view === "stamp") {
       if (!lv) return;
       if (!lvCanvas) lvCanvas = DH.preview.levelCanvas(lv, grid.w, grid.h, state.colours);
@@ -565,6 +568,7 @@
   function updateStats() {
     const el = $("stats");
     el.innerHTML = "";
+    el.hidden = !result;
     if (!result) return;
     const s = result.stats, pl = placement();
     const add = (k, v, swatch) => {
@@ -631,7 +635,7 @@
 
   async function exportGcode() {
     if (stale) { clearTimeout(genTimer); await generate(); }
-    if (!result) { toast(error ? "Fix the error shown in the preview panel first." : "Nothing to export yet."); return; }
+    if (!result) { toast(error ? "Fix the error shown in the preview panel first." : (src ? "Nothing to export yet." : "Load an image first.")); return; }
     if (!result.stats.extrudeLen) { toast("Nothing to print: adjust the stamp settings."); return; }
     const name = safeName($("fileName").value) + ".gcode";
     download(name, result.text);
@@ -742,7 +746,10 @@
     new ResizeObserver(() => redraw()).observe($("canvasWrap"));
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);
 
-    setSource(DH.sampleCanvas(), "Sample: fern UV texture");
+    // Start empty: nothing is shown until an image is loaded (or the sample is picked).
+    $("thumb").hidden = true;
+    $("dimH").textContent = "–";
+    redraw();
   }
 
   // Exposed for debugging in the console.

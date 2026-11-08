@@ -23,9 +23,9 @@
     <section class="panel" id="p-import">
       <h2><span class="num">01</span> Import</h2>
       <div class="drop" id="drop">
-        <img id="thumb" alt="Imported texture">
+        <img id="thumb" alt="Imported texture" hidden>
         <div class="drop-text">
-          <strong id="imgName">Sample: fern UV texture</strong>
+          <strong id="imgName">No image yet</strong>
           <span id="imgInfo">Drop a PNG or JPG exported from Blender's UV editor</span>
           <div class="row-btns">
             <label class="btn small" for="imgFile">Choose image</label>
@@ -105,6 +105,10 @@
           <span class="corner bl" aria-hidden="true"></span><span class="corner br" aria-hidden="true"></span>
           <div class="canvas-wrap" id="canvasWrap">
             <canvas id="view"></canvas>
+            <div class="empty" id="emptyState">
+              <p>[ no image ]</p>
+              <p>drop a png or jpg exported from blender's uv editor, or choose one in [01] import</p>
+            </div>
             <div class="busy" id="busy" hidden>computing toolpaths…</div>
           </div>
         </div>
@@ -122,7 +126,7 @@
       </div>
       <div class="legend" id="legend"></div>
       <ul class="warnings" id="warnings"></ul>
-      <p class="status" id="stats" aria-label="Print summary"></p>
+      <p class="status" id="stats" aria-label="Print summary" hidden></p>
       <div class="export">
         <label for="fileName">File name</label>
         <div class="export-row">
