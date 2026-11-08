@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Digital Harvest Stitch</title>
+<meta name="description" content="Turn a pressed UV texture into stamp-like shapes and embroidery-style G-code for printing on textile with Bambu Lab printers.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Digital Harvest <span>Stitch</span></h1>
+    <p class="steps-line">Picking <i>→</i> Pressing <i>→</i> <b>Embroidering</b></p>
+  </div>
+  <div class="top-actions">
+    <label class="btn ghost" for="presetFile">Load preset</label>
+    <input type="file" id="presetFile" accept=".json,application/json" hidden>
+    <button class="btn ghost" id="savePreset" type="button">Save preset</button>
+  </div>
+</header>
+
+<main class="layout">
+  <div class="controls">
+
+    <section class="panel" id="p-import">
+      <h2><span class="num">1</span> Import</h2>
+      <div class="drop" id="drop">
+        <img id="thumb" alt="Imported texture">
+        <div class="drop-text">
+          <strong id="imgName">Sample: fern UV texture</strong>
+          <span id="imgInfo">Drop a PNG or JPG exported from Blender's UV editor</span>
+          <div class="row-btns">
+            <label class="btn small" for="imgFile">Choose image</label>
+            <button class="btn small ghost" id="useSample" type="button">Use sample</button>
+          </div>
+        </div>
+        <input type="file" id="imgFile" accept="image/png,image/jpeg,image/webp" hidden>
+      </div>
+      <div class="fields" id="f-import"></div>
+    </section>
+
+    <section class="panel" id="p-stamp">
+      <h2><span class="num">2</span> Stamp</h2>
+      <p class="hint">Grayscale → levels → blur → threshold or posterize → despeckle → vectorize.</p>
+      <div class="fields" id="f-stamp"></div>
+    </section>
+
+    <section class="panel" id="p-machine">
+      <h2><span class="num">3</span> Machine &amp; material</h2>
+      <div class="fields" id="f-machine"></div>
+      <h3>Material</h3>
+      <div class="fields" id="f-material"></div>
+      <div class="row-btns">
+        <button class="btn small ghost" id="saveMaterial" type="button">Save as preset</button>
+        <label class="btn small ghost" for="materialFile">Load material</label>
+        <input type="file" id="materialFile" accept=".json,application/json" hidden>
+      </div>
+      <h3>Colour per height level</h3>
+      <div id="colours" class="colours"></div>
+      <div class="fields" id="f-colour"></div>
+      <div class="test-square">
+        <p class="hint">Check a printer profile before the real thing: a 20 mm two-layer square in the middle of the bed, on the bare plate.</p>
+        <button class="btn small" id="testSquare" type="button">Export test square</button>
+      </div>
+    </section>
+
+    <section class="panel" id="p-stitch">
+      <h2><span class="num">4</span> Stitch &amp; print</h2>
+      <div class="fields" id="f-stitch-mode"></div>
+      <div class="tabs level-tabs" id="levelTabs" role="tablist"></div>
+      <div class="fields" id="f-stitch"></div>
+      <h3>Print</h3>
+      <div class="fields" id="f-print"></div>
+    </section>
+  </div>
+
+  <div class="stage">
+    <section class="panel viewer">
+      <div class="viewer-head">
+        <h2><span class="num">5</span> Preview &amp; export</h2>
+        <div class="tabs" id="viewTabs" role="tablist">
+          <button type="button" role="tab" data-view="original">Original</button>
+          <button type="button" role="tab" data-view="stamp">Stamp</button>
+          <button type="button" role="tab" data-view="paths" aria-selected="true">Toolpaths</button>
+        </div>
+      </div>
+      <div class="canvas-wrap" id="canvasWrap">
+        <canvas id="view"></canvas>
+        <div class="busy" id="busy" hidden>Computing toolpaths…</div>
+      </div>
+      <div class="view-controls" id="pathControls">
+        <label class="layer-slider" for="layerSlider">
+          <span>Layer <b id="layerLabel">–</b></span>
+          <input type="range" id="layerSlider" min="1" max="1" value="1">
+        </label>
+        <div class="toggles">
+          <label><input type="checkbox" id="showTravel" checked> Travel</label>
+          <label><input type="checkbox" id="colourByLayer"> Colour by layer</label>
+          <label><input type="checkbox" id="wholeBed"> Whole bed</label>
+        </div>
+      </div>
+      <div class="legend" id="legend"></div>
+      <ul class="warnings" id="warnings"></ul>
+      <dl class="stats" id="stats"></dl>
+      <div class="export">
+        <label for="fileName">File name</label>
+        <div class="export-row">
+          <input type="text" id="fileName" value="fern_satin" spellcheck="false">
+          <span class="ext">.gcode</span>
+          <button class="btn primary" id="exportGcode" type="button">Export G-code</button>
+        </div>
+        <p class="hint">Copy the file to the root of the printer's SD card and start it from the printer's screen.</p>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="profiles/printers.js"></script>
+<script src="profiles/materials.js"></script>
+<script src="js/template.js"></script>
+<script src="js/geometry.js"></script>
+<script src="js/stamp.js"></script>
+<script src="js/stitches.js"></script>
+<script src="js/gcode.js"></script>
+<script src="js/sample.js"></script>
+<script src="js/preview.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
