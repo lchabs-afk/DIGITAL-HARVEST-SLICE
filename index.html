@@ -26,7 +26,7 @@
   <div class="controls">
 
     <section class="panel" id="p-import">
-      <h2><span class="num">1</span> Import</h2>
+      <h2><span class="num">01</span> Import</h2>
       <div class="drop" id="drop">
         <img id="thumb" alt="Imported texture">
         <div class="drop-text">
@@ -43,13 +43,13 @@
     </section>
 
     <section class="panel" id="p-stamp">
-      <h2><span class="num">2</span> Stamp</h2>
+      <h2><span class="num">02</span> Stamp</h2>
       <p class="hint">Grayscale → levels → blur → threshold or posterize → despeckle → vectorize.</p>
       <div class="fields" id="f-stamp"></div>
     </section>
 
     <section class="panel" id="p-machine">
-      <h2><span class="num">3</span> Machine &amp; material</h2>
+      <h2><span class="num">03</span> Machine &amp; material</h2>
       <div class="fields" id="f-machine"></div>
       <h3>Material</h3>
       <div class="fields" id="f-material"></div>
@@ -68,7 +68,7 @@
     </section>
 
     <section class="panel" id="p-stitch">
-      <h2><span class="num">4</span> Stitch &amp; print</h2>
+      <h2><span class="num">04</span> Stitch &amp; print</h2>
       <div class="fields" id="f-stitch-mode"></div>
       <div class="tabs level-tabs" id="levelTabs" role="tablist"></div>
       <div class="fields" id="f-stitch"></div>
@@ -80,16 +80,30 @@
   <div class="stage">
     <section class="panel viewer">
       <div class="viewer-head">
-        <h2><span class="num">5</span> Preview &amp; export</h2>
+        <h2><span class="num">05</span> Preview &amp; export</h2>
         <div class="tabs" id="viewTabs" role="tablist">
           <button type="button" role="tab" data-view="original">Original</button>
           <button type="button" role="tab" data-view="stamp">Stamp</button>
           <button type="button" role="tab" data-view="paths" aria-selected="true">Toolpaths</button>
         </div>
       </div>
-      <div class="canvas-wrap" id="canvasWrap">
-        <canvas id="view"></canvas>
-        <div class="busy" id="busy" hidden>Computing toolpaths…</div>
+      <div class="frame">
+        <div class="dim dim-w">
+          <span class="dim-box" id="dimW" title="Output width in mm">80</span>
+          <input type="range" id="dimWidth" min="10" max="340" step="1" value="80" aria-label="Output width in mm">
+        </div>
+        <div class="dim dim-h">
+          <span class="dim-box" id="dimH" title="Output height in mm">57</span>
+          <span class="dim-line" aria-hidden="true"></span>
+        </div>
+        <div class="hoop">
+          <span class="corner tl" aria-hidden="true"></span><span class="corner tr" aria-hidden="true"></span>
+          <span class="corner bl" aria-hidden="true"></span><span class="corner br" aria-hidden="true"></span>
+          <div class="canvas-wrap" id="canvasWrap">
+            <canvas id="view"></canvas>
+            <div class="busy" id="busy" hidden>computing toolpaths…</div>
+          </div>
+        </div>
       </div>
       <div class="view-controls" id="pathControls">
         <label class="layer-slider" for="layerSlider">
@@ -104,13 +118,13 @@
       </div>
       <div class="legend" id="legend"></div>
       <ul class="warnings" id="warnings"></ul>
-      <dl class="stats" id="stats"></dl>
+      <p class="status" id="stats" aria-label="Print summary"></p>
       <div class="export">
         <label for="fileName">File name</label>
         <div class="export-row">
           <input type="text" id="fileName" value="fern_satin" spellcheck="false">
           <span class="ext">.gcode</span>
-          <button class="btn primary" id="exportGcode" type="button">Export G-code</button>
+          <button class="btn primary" id="exportGcode" type="button">export g-code</button>
         </div>
         <p class="hint">Copy the file to the root of the printer's SD card and start it from the printer's screen.</p>
       </div>

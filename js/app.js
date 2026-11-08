@@ -56,9 +56,16 @@
   // ---------------------------------------------------------------- field builder
   const NEXT = { size: onSize, stamp: onStamp, paths: onPaths, gcode: onGcode, none: () => {} };
 
+  // Slider end labels in the [04] [07] [10] style.
+  function tickLabel(v, step) {
+    if (step !== undefined) v = Math.round(v / step) * step;
+    v = Math.round(v * 100) / 100;
+    return Number.isInteger(v) && v >= 0 && v < 10 ? "0" + v : String(v);
+  }
+
   function field(spec) {
     const el = document.createElement("div");
-    el.className = "field" + (spec.type === "check" ? " check" : "");
+    el.className = "field" + (spec.type === "check" ? " check" : "") + (spec.type === "range" ? " ranged" : "");
     const id = "f_" + spec.path.replace(/\./g, "_");
     const val = get(spec.path);
     const changed = (v) => { set(spec.path, v); (spec.after || (() => {}))(v); NEXT[spec.on || "paths"](); save(); };
@@ -92,7 +99,8 @@
       const showRange = spec.type === "range";
       el.innerHTML = `<label for="${id}">${spec.label}</label>
         <span class="num-in"><input type="number" id="${id}" min="${spec.min}" max="${spec.max}" step="${spec.step}"><span class="unit">${spec.unit || ""}</span></span>
-        ${showRange ? `<input type="range" aria-label="${spec.label}" min="${spec.min}" max="${spec.max}" step="${spec.step}">` : ""}`;
+        ${showRange ? `<input type="range" aria-label="${spec.label}" min="${spec.min}" max="${spec.max}" step="${spec.step}">
+        <div class="ticks" aria-hidden="true"><span>[${tickLabel(spec.min)}]</span><span>[${tickLabel((spec.min + spec.max) / 2, spec.step)}]</span><span>[${tickLabel(spec.max)}]</span></div>` : ""}`;
       const num = el.querySelector('input[type="number"]'), rng = el.querySelector('input[type="range"]');
       num.value = val; if (rng) rng.value = val;
       const clamp = (v) => Math.min(spec.max, Math.max(spec.min, v));
@@ -131,6 +139,15 @@
     const el = $("sizeLine");
     if (!el || !src) return;
     el.textContent = `Print size ${state.import.widthMm.toFixed(0)} × ${heightMm().toFixed(1)} mm (height follows the image's aspect ratio).`;
+    $("dimW").textContent = state.import.widthMm.toFixed(0);
+    $("dimH").textContent = heightMm().toFixed(1);
+    $("dimWidth").value = state.import.widthMm;
+    const f = $("f_import_widthMm");
+    if (f && +f.value !== state.import.widthMm) {
+      f.value = state.import.widthMm;
+      const r = f.closest(".field").querySelector('input[type="range"]');
+      if (r) r.value = state.import.widthMm;
+    }
   }
 
   function renderStamp() {
@@ -475,15 +492,23 @@
     el.innerHTML = "";
     if (!result) return;
     const s = result.stats, pl = placement();
-    const add = (dt, dd) => { const d = document.createElement("div"); d.innerHTML = `<dt>${dt}</dt><dd>${dd}</dd>`; el.appendChild(d); };
-    add("Layers", `${s.layers} <small>· ${(state.print.firstLayerZ + state.print.zOffset + Math.max(0, s.layers - 1) * state.print.layerHeight).toFixed(2)} mm top Z</small>`);
-    add("Print time", `${fmtTime(s.time)} <small>+ printer start</small>`);
-    add("Size", `${pl.W.toFixed(0)} × ${pl.H.toFixed(1)} <small>mm</small>`);
-    add("Filament", `${(s.filamentMm / 1000).toFixed(2)} m <small>· ${s.filamentG.toFixed(1)} g</small>`);
+    const add = (k, v, swatch) => {
+      const span = document.createElement("span");
+      span.innerHTML = `[ ${swatch ? `<i class="swatch" style="background:${swatch}"></i>` : ""}${k}: ${v} ]`;
+      el.appendChild(span);
+    };
+    const topZ = state.print.firstLayerZ + state.print.zOffset + Math.max(0, s.layers - 1) * state.print.layerHeight;
+    add("printer", escapeHtml(printer().name.toLowerCase()));
+    add("size", `${pl.W.toFixed(0)} × ${pl.H.toFixed(1)} mm`);
+    add("levels", presentLevels);
+    add("layers", `${s.layers} · top z ${topZ.toFixed(2)}`);
+    add("time", fmtTime(s.time) + " + start");
+    add("filament", `${(s.filamentMm / 1000).toFixed(2)} m · ${s.filamentG.toFixed(1)} g`);
     for (const k of Object.keys(s.perColour)) {
       const pc = s.perColour[k], c = state.colours[pc.colour];
-      add(`<span class="swatch" style="background:${c.hex}"></span>${escapeHtml(c.name)}`, `${(pc.filamentMm / 1000).toFixed(2)} m <small>· ${pc.grams.toFixed(1)} g</small>`);
+      add(escapeHtml(c.name.toLowerCase()), `${pc.grams.toFixed(1)} g`, c.hex);
     }
+    add("pauses", s.pauses.length);
   }
 
   function updateWarnings() {
@@ -637,6 +662,7 @@
     $("saveMaterial").addEventListener("click", saveMaterial);
     $("materialFile").addEventListener("change", (e) => { if (e.target.files[0]) loadMaterial(e.target.files[0]); e.target.value = ""; });
     $("fileName").addEventListener("change", save);
+    $("dimWidth").addEventListener("input", () => { state.import.widthMm = +$("dimWidth").value; onSize(); save(); });
     new ResizeObserver(() => redraw()).observe($("canvasWrap"));
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);
 
