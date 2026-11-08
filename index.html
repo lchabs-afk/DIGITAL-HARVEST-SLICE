@@ -38,13 +38,31 @@
     </section>
 
     <section class="panel" id="p-stamp">
-      <h2><span class="num">02</span> Stamp</h2>
-      <p class="hint">Grayscale → levels → blur → threshold or posterize → despeckle → vectorize.</p>
+      <h2><span class="num">02</span> Transform</h2>
+      <div class="mode-switch" id="transformMode" role="group" aria-label="Transform method">
+        <button type="button" data-mode="stamp">stamp</button>
+        <button type="button" data-mode="trace">image trace</button>
+      </div>
+      <p class="hint" id="transformHint"></p>
       <div class="fields" id="f-stamp"></div>
+      <div class="traced" id="tracedColours" hidden>
+        <h3>Traced colours</h3>
+        <div class="traced-swatches" id="tracedSwatches"></div>
+        <button class="btn small" id="useTraced" type="button">use as filament colours</button>
+      </div>
+    </section>
+
+    <section class="panel" id="p-stitch">
+      <h2><span class="num">03</span> Stitch &amp; print</h2>
+      <div class="fields" id="f-stitch-mode"></div>
+      <div class="tabs level-tabs" id="levelTabs" role="tablist"></div>
+      <div class="fields" id="f-stitch"></div>
+      <h3>Print</h3>
+      <div class="fields" id="f-print"></div>
     </section>
 
     <section class="panel" id="p-machine">
-      <h2><span class="num">03</span> Machine &amp; material</h2>
+      <h2><span class="num">04</span> Machine &amp; material</h2>
       <div class="fields" id="f-machine"></div>
       <h3>Material</h3>
       <div class="fields" id="f-material"></div>
@@ -60,15 +78,6 @@
         <p class="hint">Check a printer profile before the real thing: a 20 mm two-layer square in the middle of the bed, on the bare plate.</p>
         <button class="btn small" id="testSquare" type="button">Export test square</button>
       </div>
-    </section>
-
-    <section class="panel" id="p-stitch">
-      <h2><span class="num">04</span> Stitch &amp; print</h2>
-      <div class="fields" id="f-stitch-mode"></div>
-      <div class="tabs level-tabs" id="levelTabs" role="tablist"></div>
-      <div class="fields" id="f-stitch"></div>
-      <h3>Print</h3>
-      <div class="fields" id="f-print"></div>
     </section>
   </div>
 
@@ -134,6 +143,7 @@
 <script src="js/template.js"></script>
 <script src="js/geometry.js"></script>
 <script src="js/stamp.js"></script>
+<script src="js/trace.js"></script>
 <script src="js/stitches.js"></script>
 <script src="js/gcode.js"></script>
 <script src="js/sample.js"></script>

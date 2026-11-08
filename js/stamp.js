@@ -15,14 +15,15 @@
   // imageData: {data: RGBA bytes, width, height} already resampled to the grid.
   function toGray(imageData) {
     const n = imageData.width * imageData.height, d = imageData.data;
-    const gray = new Float32Array(n), alpha = new Uint8Array(n);
+    const gray = new Float32Array(n), alpha = new Uint8Array(n), rgb = new Uint8Array(n * 3);
     for (let i = 0; i < n; i++) {
       const a = d[i * 4 + 3] / 255;
       const l = (0.2126 * d[i * 4] + 0.7152 * d[i * 4 + 1] + 0.0722 * d[i * 4 + 2]) / 255;
       gray[i] = l * a + (1 - a); // transparent pixels read as white
+      for (let c = 0; c < 3; c++) rgb[i * 3 + c] = Math.round(d[i * 4 + c] * a + 255 * (1 - a));
       alpha[i] = a >= 0.5 ? 1 : 0;
     }
-    return { gray, alpha, w: imageData.width, h: imageData.height };
+    return { gray, alpha, rgb, w: imageData.width, h: imageData.height };
   }
 
   // Remove components of `inside(i)` smaller than minArea pixels; set(i) is
@@ -72,14 +73,19 @@
       const band = Math.min(N - 1, Math.floor((t[i] / B) * N)); // 0 = darkest band
       lv[i] = s.darkHigh ? N - band : band + 1;
     }
-    const minArea = Math.pow(s.minFeatureMm / p, 2);
+    despeckle(lv, w, h, N, Math.pow(s.minFeatureMm / p, 2));
+    return lv;
+  }
+
+  // Remove islands and fill holes smaller than minArea pixels, level by level.
+  function despeckle(lv, w, h, N, minArea) {
+    const n = w * h;
     for (let k = 1; k <= N; k++) {
       removeSmall(n, w, h, (i) => lv[i] >= k, minArea, (i) => { lv[i] = k - 1; });
       const fill = (i) => { lv[i] = k; };
       fill.keepEdge = true; // background touching the border is never a "hole"
       removeSmall(n, w, h, (i) => lv[i] < k, minArea, fill);
     }
-    return lv;
   }
 
   // Signed distance (mm) to the outline of the region printed at level >= k.
@@ -100,5 +106,5 @@
     return count;
   }
 
-  DH.stamp = { gridFor, toGray, levelMap, levelField, levelStats };
+  DH.stamp = { gridFor, toGray, levelMap, levelField, levelStats, despeckle };
 })(globalThis.DH = globalThis.DH || {});

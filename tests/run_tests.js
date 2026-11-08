@@ -1,6 +1,6 @@
 // node tests/run_tests.js — checks templates, geometry and G-code without a browser.
 const path = require("path");
-for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/stamp.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
+for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/stamp.js", "js/trace.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
 const DH = globalThis.DH;
 let fails = 0;
 const ok = (cond, msg) => { if (!cond) { fails++; console.log("FAIL", msg); } else console.log("ok  ", msg); };
@@ -33,6 +33,13 @@ const lv = DH.stamp.levelMap(base, st, grid.p);
 const counts = DH.stamp.levelStats(lv, 2);
 ok(counts[1] > 0 && counts[2] > 0, "two levels present " + JSON.stringify(counts));
 ok(lv[10 * grid.w + 10] === 0, "speck removed by min feature size");
+
+// Image Trace on the same synthetic image
+for (const mode of ["bw", "gray", "colour"]) {
+  const tr = DH.trace.traceMap(base, { mode, threshold: 128, colours: 3, paths: 60, corners: 50, noiseMm: 0.5, ignoreWhite: true, darkHigh: true, alphaMask: true }, grid.p);
+  const c = DH.stamp.levelStats(tr.lv, tr.levels);
+  ok(tr.levels >= 1 && c.slice(1).some((n) => n > 0) && tr.swatches.length === tr.levels, `trace ${mode}: ${tr.levels} levels ${JSON.stringify(c)} ${tr.swatches.join(" ")}`);
+}
 
 const print = { nozzle: 0.4, lineWidth: 0.45, layerHeight: 0.2, layersPerLevel: 2, firstLayerZ: 0.2, zOffset: 0, speed: 40, firstSpeed: 15, travelSpeed: 150, firstLayerFlow: 1.1, skipLeveling: true, pauseLayer: 0, bedType: "Textured PEI Plate", retractMinTravel: 2, zHop: 0.4, simplify: 0.03, colourChanges: true };
 const layers = [];

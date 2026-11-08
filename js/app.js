@@ -8,6 +8,8 @@
   const DEFAULTS = {
     import: { widthMm: 80, offX: 0, offY: 0, mirror: false },
     stamp: { black: 0, white: 255, gamma: 1, contrast: 0, smoothMm: 0.6, balance: 62, levels: 2, minFeatureMm: 0.8, simplify: 0.03, invert: false, darkHigh: true, alphaMask: true },
+    transform: "stamp",
+    trace: { mode: "colour", threshold: 128, colours: 3, paths: 60, corners: 50, noiseMm: 0.5, ignoreWhite: true, darkHigh: true, alphaMask: true },
     machine: { printer: "a1mini", nozzle: 0.4, bedType: "Textured PEI Plate", skipLeveling: true },
     material: Object.assign({}, DH.MATERIALS[0]),
     colours: [
@@ -52,6 +54,8 @@
     ks.reduce((o, k) => o[k], state)[last] = v;
   }
   const printer = () => DH.PRINTERS.find((p) => p.id === state.machine.printer) || DH.PRINTERS[0];
+  // Number of height levels the active transform produces.
+  const levelCount = () => (state.transform === "trace" ? (state.trace.mode === "bw" ? 1 : state.trace.colours) : state.stamp.levels);
 
   // ---------------------------------------------------------------- field builder
   const NEXT = { size: onSize, stamp: onStamp, paths: onPaths, gcode: onGcode, none: () => {} };
@@ -150,10 +154,32 @@
     }
   }
 
-  function renderStamp() {
-    fill("f-stamp", [
+  function levelsChanged() {
+    levelTab = Math.min(levelTab, levelCount() - 1);
+    renderColours(); renderStitch();
+  }
+
+  // Panel 02: Stamp or Image Trace turns the picture into height levels.
+  function renderTransform() {
+    const sw = $("transformMode");
+    sw.querySelectorAll("button").forEach((b) => {
+      b.setAttribute("aria-pressed", String(b.dataset.mode === state.transform));
+      b.onclick = () => {
+        if (state.transform === b.dataset.mode) return;
+        state.transform = b.dataset.mode;
+        renderTransform(); levelsChanged(); onStamp(); save();
+      };
+    });
+    $("viewTabs").querySelector('[data-view="stamp"]').textContent = state.transform === "trace" ? "trace" : "stamp";
+    const trace = state.transform === "trace";
+    $("transformHint").textContent = trace
+      ? "Like Illustrator's Image Trace: groups the picture into a few flat tones or colours with crisp edges. Each one becomes a height level."
+      : "Like Photoshop's Stamp filter: grayscale → levels → blur → threshold or posterize. Soft, organic shapes.";
+    $("tracedColours").hidden = !trace;
+    if (!trace) {
+      fill("f-stamp", [
       { path: "stamp.levels", label: "Height levels", type: "seg", options: [1, 2, 3, 4, 5].map((n) => [n, String(n)]), on: "stamp",
-        help: "1 is a classic stamp. More levels posterize the tones into a stepped relief.", after: () => { levelTab = Math.min(levelTab, state.stamp.levels - 1); renderColours(); renderStitch(); } },
+        help: "1 is a classic stamp. More levels posterize the tones into a stepped relief.", after: levelsChanged },
       { path: "stamp.balance", label: "Light/dark balance", type: "range", min: 1, max: 99, step: 1, unit: "%", on: "stamp", help: "Where the cut between ink and bare fabric falls. Higher prints more." },
       { path: "stamp.smoothMm", label: "Smoothness", type: "range", min: 0, max: 6, step: 0.1, unit: "mm", on: "stamp", help: "Blur radius before the cut: rounder, more organic shapes." },
       { path: "stamp.black", label: "Levels: black point", type: "range", min: 0, max: 254, step: 1, unit: "", on: "stamp" },
@@ -165,7 +191,49 @@
       { path: "stamp.invert", label: "Invert (print the light areas)", type: "check", on: "stamp" },
       { path: "stamp.darkHigh", label: "Dark areas are the tallest", type: "check", on: "stamp", help: "Off: light areas become the tallest relief." },
       { path: "stamp.alphaMask", label: "Never print transparent pixels", type: "check", on: "stamp" },
-    ]);
+      ]);
+      return;
+    }
+    const t = state.trace, specs = [
+      { path: "trace.mode", label: "Mode", type: "seg", options: [["bw", "b&w"], ["gray", "grayscale"], ["colour", "colour"]], on: "stamp",
+        after: () => { renderTransform(); levelsChanged(); } },
+    ];
+    if (t.mode === "bw") {
+      specs.push({ path: "trace.threshold", label: "Threshold", type: "range", min: 0, max: 255, step: 1, unit: "", on: "stamp", help: "Pixels darker than this are printed." });
+    } else {
+      specs.push({ path: "trace.colours", label: t.mode === "gray" ? "Grays" : "Colours", type: "seg", options: [1, 2, 3, 4, 5].map((n) => [n, String(n)]), on: "stamp",
+        after: levelsChanged, help: "How many tones to keep. Each one is printed as its own height level." });
+    }
+    specs.push(
+      { path: "trace.paths", label: "Paths", type: "range", min: 0, max: 100, step: 1, unit: "%", on: "paths", help: "High follows the pixels closely; low gives smoother, simpler paths." },
+      { path: "trace.corners", label: "Corners", type: "range", min: 0, max: 100, step: 1, unit: "%", on: "stamp", help: "High keeps sharp corners; low rounds them." },
+      { path: "trace.noiseMm", label: "Noise", type: "range", min: 0, max: 5, step: 0.1, unit: "mm", on: "stamp", help: "Ignores islands and holes smaller than this." },
+    );
+    if (t.mode !== "bw") specs.push({ path: "trace.ignoreWhite", label: "Ignore white", type: "check", on: "stamp", help: "Leaves the lightest tone as bare fabric." });
+    specs.push(
+      { path: "trace.darkHigh", label: "Dark areas are the tallest", type: "check", on: "stamp" },
+      { path: "trace.alphaMask", label: "Never print transparent pixels", type: "check", on: "stamp" },
+    );
+    fill("f-stamp", specs);
+    renderTracedColours();
+  }
+
+  let traced = [];
+  function renderTracedColours() {
+    const box = $("tracedSwatches");
+    box.innerHTML = "";
+    traced.forEach((hex, k) => {
+      const s = document.createElement("span");
+      s.innerHTML = `<i style="background:${hex}"></i>l${k + 1}`;
+      box.appendChild(s);
+    });
+    $("useTraced").disabled = !traced.length;
+  }
+  function useTracedColours() {
+    traced.forEach((hex, k) => { if (state.colours[k]) state.colours[k].hex = hex; });
+    lvCanvas = null;
+    renderColours(); renderStitchTabs(); updateLegend(); updateStats(); redraw(); save();
+    toast("Filament colours set from the trace");
   }
 
   function renderMachine() {
@@ -230,7 +298,7 @@
   function renderColours() {
     const c = $("colours");
     c.innerHTML = "";
-    for (let k = 0; k < state.stamp.levels; k++) {
+    for (let k = 0; k < levelCount(); k++) {
       const col = state.colours[k];
       const row = document.createElement("div");
       row.className = "colour-row";
@@ -250,9 +318,9 @@
   function renderStitchTabs() {
     const tabs = $("levelTabs");
     tabs.innerHTML = "";
-    tabs.hidden = state.stitchSame || state.stamp.levels < 2;
+    tabs.hidden = state.stitchSame || levelCount() < 2;
     if (tabs.hidden) return;
-    for (let k = 0; k < state.stamp.levels; k++) {
+    for (let k = 0; k < levelCount(); k++) {
       const b = document.createElement("button");
       b.type = "button"; b.setAttribute("role", "tab");
       b.setAttribute("aria-selected", String(k === levelTab));
@@ -308,7 +376,7 @@
   }
 
   function renderAll() {
-    renderImport(); renderStamp(); renderMachine(); renderMaterial(); renderColours(); renderStitch(); renderPrint();
+    renderImport(); renderTransform(); renderMachine(); renderMaterial(); renderColours(); renderStitch(); renderPrint();
     $("fileName").value = state.fileName || $("fileName").value;
   }
 
@@ -345,10 +413,17 @@
     cancelAnimationFrame(stampRaf);
     stampRaf = requestAnimationFrame(() => {
       if (!base) return;
-      lv = DH.stamp.levelMap(base, state.stamp, grid.p);
-      const counts = DH.stamp.levelStats(lv, state.stamp.levels);
+      if (state.transform === "trace") {
+        const r = DH.trace.traceMap(base, state.trace, grid.p);
+        lv = r.lv; traced = r.swatches;
+        renderTracedColours();
+      } else {
+        lv = DH.stamp.levelMap(base, state.stamp, grid.p);
+      }
+      const N = levelCount();
+      const counts = DH.stamp.levelStats(lv, N);
       presentLevels = 0;
-      for (let k = 1; k <= state.stamp.levels; k++) if (counts.slice(k).some((n) => n > 0)) presentLevels = k;
+      for (let k = 1; k <= N; k++) if (counts.slice(k).some((n) => n > 0)) presentLevels = k;
       lvCanvas = null;
       fields = {};
       onPaths();
@@ -369,7 +444,7 @@
     const p = state.print;
     return Object.assign({}, p, {
       nozzle: state.machine.nozzle, bedType: state.machine.bedType, skipLeveling: state.machine.skipLeveling,
-      simplify: state.stamp.simplify, colourChanges: state.colourChanges,
+      simplify: state.transform === "trace" ? DH.trace.simplifyFor(state.trace.paths) : state.stamp.simplify, colourChanges: state.colourChanges,
     });
   }
 
@@ -473,7 +548,7 @@
       add(`<i style="background:${DH.preview.layerHue(0, 2)}"></i>first layer`);
       add(`<i style="background:${DH.preview.layerHue(1, 2)}"></i>last layer`);
     } else {
-      for (let k = 0; k < state.stamp.levels; k++) {
+      for (let k = 0; k < levelCount(); k++) {
         const c = state.colours[k];
         add(`<i style="background:${c.hex}"></i>L${k + 1} ${escapeHtml(c.name)}`);
       }
@@ -662,6 +737,7 @@
     $("saveMaterial").addEventListener("click", saveMaterial);
     $("materialFile").addEventListener("change", (e) => { if (e.target.files[0]) loadMaterial(e.target.files[0]); e.target.value = ""; });
     $("fileName").addEventListener("change", save);
+    $("useTraced").addEventListener("click", useTracedColours);
     $("dimWidth").addEventListener("input", () => { state.import.widthMm = +$("dimWidth").value; onSize(); save(); });
     new ResizeObserver(() => redraw()).observe($("canvasWrap"));
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);

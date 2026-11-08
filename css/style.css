@@ -151,6 +151,17 @@ input[type="checkbox"]:checked::after { left: 18px; background: var(--ink); }
 }
 .seg button[aria-pressed="true"] { background: var(--solid); border-color: var(--solid); color: var(--paper); }
 
+/* Stamp / image trace switch: stacked full-width boxes, the active one filled */
+.mode-switch { display: grid; gap: 10px; margin-top: 14px; }
+.mode-switch button {
+  height: 40px; border: 1px solid var(--ink); border-radius: 3px; background: transparent; cursor: pointer;
+  font-size: 12px; letter-spacing: 0.03em;
+}
+.mode-switch button[aria-pressed="true"] { background: var(--solid); border-color: var(--solid); color: var(--paper); }
+.traced-swatches { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 12px; font-size: 11.5px; color: var(--muted); }
+.traced-swatches span { display: inline-flex; align-items: center; gap: 6px; }
+.traced-swatches i { width: 18px; height: 18px; border: 1px solid var(--ink); border-radius: 3px; display: inline-block; }
+
 /* Buttons: outlined boxes; the main action is filled */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
