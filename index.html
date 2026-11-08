@@ -10,20 +10,15 @@
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-<header class="top">
-  <div class="brand">
-    <h1>Digital Harvest <span>Stitch</span></h1>
-    <p class="steps-line">Picking <i>→</i> Pressing <i>→</i> <b>Embroidering</b></p>
-  </div>
-  <div class="top-actions">
-    <label class="btn ghost" for="presetFile">Load preset</label>
-    <input type="file" id="presetFile" accept=".json,application/json" hidden>
-    <button class="btn ghost" id="savePreset" type="button">Save preset</button>
-  </div>
-</header>
 
 <main class="layout">
   <div class="controls">
+    <h1 class="visually-hidden">Digital Harvest Stitch</h1>
+    <div class="preset-bar">
+      <label class="btn small" for="presetFile">load preset</label>
+      <input type="file" id="presetFile" accept=".json,application/json" hidden>
+      <button class="btn small" id="savePreset" type="button">save preset</button>
+    </div>
 
     <section class="panel" id="p-import">
       <h2><span class="num">01</span> Import</h2>

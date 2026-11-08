@@ -53,8 +53,12 @@ button, input, select { font: inherit; color: inherit; }
 .steps-line b { color: var(--ink); font-weight: 500; }
 .top-actions { display: flex; gap: 8px; }
 
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.preset-bar { display: flex; gap: 8px; padding: 0 0 18px; }
+.preset-bar .btn { flex: 1; }
+
 .layout {
-  max-width: 1440px; margin: 0 auto;
+  max-width: 1440px; margin: 0 auto; padding-top: 24px;
   display: grid; grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); gap: 56px; align-items: start;
 }
 .controls { display: flex; flex-direction: column; min-width: 0; }
