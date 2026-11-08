@@ -74,3 +74,7 @@ The tests check the template interpreter, the stamp pipeline on a synthetic imag
 - **Not yet tested on a printer.** Print the test square first on each printer.
 - **H2D:** its start G-code is written for two nozzles. The app fills it in for one filament on one nozzle (`filament_map = 1`), so check that one with the test square before anything else.
 - Next, milestone 6: export `.gcode.3mf` so files can go through Bambu Studio / Handy with AMS slot mapping and automatic colour changes.
+
+## Credits
+
+The interface is set in [Hasköy](https://github.com/ertekinno/haskoy) by Ertekin Erdin. It is licensed under the SIL Open Font License 1.1 (see `fonts/Haskoy-OFL.txt`) and served from this repo.

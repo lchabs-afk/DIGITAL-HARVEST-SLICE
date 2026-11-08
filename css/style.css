@@ -1,37 +1,31 @@
-/* Layout: controls column (the five process steps) beside a sticky preview "hoop". */
+/* Layout: controls column (the five process steps) beside a sticky preview "hoop".
+   Single black look on purpose: the same palette in every viewer theme. */
+@font-face {
+  font-family: "Haskoy";
+  src: url("../fonts/Haskoy-variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
 :root {
-  --paper: #eef0ea;      /* unbleached linen */
-  --panel: #f8f9f5;
-  --ink: #18201a;
-  --muted: #5b665d;
-  --line: #d2d8cf;
-  --accent: #2f45b5;     /* indigo thread */
-  --accent-ink: #ffffff;
-  --accent-soft: #dfe3f7;
-  --fabric: #e4e0d5;
-  --weave: rgba(24, 32, 26, 0.05);
-  --warn: #9a5a00;
-  --warn-soft: #f6ead6;
-  --bad: #b3261e;
-  --bad-soft: #f7dedb;
-  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
-  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --paper: #000000;      /* page background: pure black */
+  --panel: #0b0b0b;
+  --ink: #ececea;
+  --muted: #8e918d;
+  --line: #262826;
+  --accent: #9ba9ff;     /* indigo thread */
+  --accent-ink: #0b0f2b;
+  --accent-soft: #171c38;
+  --fabric: #121312;
+  --weave: rgba(236, 236, 234, 0.035);
+  --warn: #e3a64a;
+  --warn-soft: #2a1f0e;
+  --bad: #ff8a80;
+  --bad-soft: #2d1513;
+  --display: "Haskoy", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body: "Haskoy", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --mono: "Haskoy", "Avenir Next", "Segoe UI", system-ui, sans-serif;
   --r: 10px;
-  color-scheme: light;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --paper: #101511; --panel: #171e18; --ink: #e3e8e0; --muted: #98a399; --line: #2b352d;
-    --accent: #9ba9ff; --accent-ink: #0e1431; --accent-soft: #232a4d; --fabric: #232924;
-    --weave: rgba(227, 232, 224, 0.04); --warn: #e3a64a; --warn-soft: #3a2c14; --bad: #ff8a80; --bad-soft: #3d1c19;
-    color-scheme: dark;
-  }
-}
-:root[data-theme="dark"] {
-  --paper: #101511; --panel: #171e18; --ink: #e3e8e0; --muted: #98a399; --line: #2b352d;
-  --accent: #9ba9ff; --accent-ink: #0e1431; --accent-soft: #232a4d; --fabric: #232924;
-  --weave: rgba(227, 232, 224, 0.04); --warn: #e3a64a; --warn-soft: #3a2c14; --bad: #ff8a80; --bad-soft: #3d1c19;
   color-scheme: dark;
 }
 
