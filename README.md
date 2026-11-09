@@ -67,7 +67,7 @@ python3 tools/import_bambu.py BambuStudio
 node tests/run_tests.js
 ```
 
-The tests check the template interpreter, the stamp pipeline on a synthetic image, every stitch pattern, and a full G-code build for every printer, with no unresolved placeholders and no NaN moves.
+The tests check the template interpreter, the image trace on a synthetic image, every stitch pattern, and a full G-code build for every printer, with no unresolved placeholders and no NaN moves.
 
 ## Status and roadmap
 
