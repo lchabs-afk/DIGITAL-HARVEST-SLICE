@@ -2,7 +2,7 @@
 
 Step 3 of **Digital Harvest**: *picking* (3D-scanning nature with Polycam) → *pressing* (the 2D UV texture from Blender's UV editor) → **embroidering** (printing that texture directly onto textile).
 
-This browser app turns the pressed UV texture into stamp-like shapes, like Photoshop's Stamp filter, and writes the G-code itself, with no slicer. Fill paths imitate embroidery stitches, and up to five height levels build a stepped relief, each in its own filament colour.
+This browser app traces the pressed UV texture into a few flat shapes, like Illustrator's Image Trace, and writes the G-code itself, with no slicer. Fill paths imitate embroidery stitches, and up to five height levels build a stepped relief, each in its own filament colour.
 
 Everything runs in the browser. No server, no install, and your image never leaves your computer.
 
@@ -14,12 +14,10 @@ Everything runs in the browser. No server, no install, and your image never leav
 ### The five panels
 
 1. **Import:** drop a PNG/JPG, set the output width in mm (the height follows the aspect ratio), and offset it from the bed centre. Transparent pixels are never printed.
-2. **Transform:** choose how the picture becomes shapes. Both produce the same height levels, so everything after this step is shared.
-   - **Stamp** works like Photoshop's Stamp filter: levels, contrast, smoothness (blur), light/dark balance, 1–5 height levels, min feature size, simplification, invert, and which tone is tallest. It gives soft, organic shapes.
-   - **Image trace** works like Illustrator's Image Trace: *b&w* (threshold), *grayscale* or *colour* (1–5 tones, clustered in the OKLab colour space), plus paths, corners, noise and ignore white. It gives flat regions with crisp edges, and *use as filament colours* copies the traced colours to the level colours.
+2. **Image trace:** works like Illustrator's Image Trace. Choose *b&w* (threshold), *grayscale* or *colour* (1–5 tones, clustered in the OKLab colour space), then set paths, corners, noise and ignore white. Each tone becomes one height level, darkest tallest by default. *Use as filament colours* copies the traced colours to the level colours.
 3. **Stitch & print:** a pattern per level: *Satin* (dense zigzag), *Fill / tatami* (parallel lines, optionally rotated each layer), *Contour* (concentric inward rings), *Running stitch* (outline, optionally dashed), or *Outline + fill*. Then line width, layer height, layers per level, first-layer Z, Z offset, speeds, first-layer flow, retraction and a pause layer for sandwich mode.
 4. **Machine & material:** a Bambu Lab printer (A1 mini, A1, P1P, P1S, X1 Carbon, H2D), nozzle, build plate, *skip auto bed leveling*, an editable material (PLA / PETG / TPU 95A, or your own saved presets), a filament colour per level, and **Export test square**.
-5. **Preview & export:** original, stamp/trace or toolpath view with a layer slider, travel moves dashed, colour by filament or by layer. A status line shows the time and the filament weight per colour. **Export G-code** saves `name.gcode`.
+5. **Preview & export:** original, trace or toolpath view with a layer slider, travel moves dashed, colour by filament or by layer. A status line shows the time and the filament weight per colour. **Export G-code** saves `name.gcode`.
 
 **Save preset** / **Load preset** write and read every setting as a JSON file, e.g. `fern_satin.json`.
 
@@ -40,7 +38,7 @@ Copy the `.gcode` file to the root of the printer's SD card and start it from th
 
 | File | Job |
 |---|---|
-| `js/stamp.js` | image → grayscale → levels → blur → posterize → despeckle → level map; signed distance field per level |
+| `js/raster.js` | working grid, grayscale/RGB copy, despeckle, and the signed distance field of each level |
 | `js/trace.js` | Image Trace: threshold or k-means clustering (OKLab) → level map, with corner rounding and noise removal |
 | `js/geometry.js` | exact Euclidean distance transform, marching-squares iso-contours, Douglas–Peucker simplification, scanline clipping |
 | `js/stitches.js` | distance field → stitch toolpaths (outlines are iso-contours at ½, 1½ … line widths inside the edge) |
@@ -73,7 +71,7 @@ The tests check the template interpreter, the stamp pipeline on a synthetic imag
 
 ## Status and roadmap
 
-- Done: milestones 1–5 of the spec (import and stamp, Bambu profiles plus test square, all stitch patterns, height levels with manual colour change, toolpath preview, stats, presets).
+- Done: milestones 1–5 of the spec (import and image trace, Bambu profiles plus test square, all stitch patterns, height levels with manual colour change, toolpath preview, stats, presets).
 - **Not yet tested on a printer.** Print the test square first on each printer.
 - **H2D:** its start G-code is written for two nozzles. The app fills it in for one filament on one nozzle (`filament_map = 1`), so check that one with the test square before anything else.
 - Next, milestone 6: export `.gcode.3mf` so files can go through Bambu Studio / Handy with AMS slot mapping and automatic colour changes.

@@ -1,6 +1,6 @@
 // node tests/run_tests.js — checks templates, geometry and G-code without a browser.
 const path = require("path");
-for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/stamp.js", "js/trace.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
+for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/raster.js", "js/trace.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
 const DH = globalThis.DH;
 let fails = 0;
 const ok = (cond, msg) => { if (!cond) { fails++; console.log("FAIL", msg); } else console.log("ok  ", msg); };
@@ -25,19 +25,19 @@ function synth(w, h) {
   }
   return { data, width: w, height: h };
 }
-const grid = DH.stamp.gridFor(60, 40);
-const base = DH.stamp.toGray(synth(grid.w, grid.h));
-const st = { black: 0, white: 255, gamma: 1, contrast: 0, smoothMm: 0.4, balance: 50, levels: 2, minFeatureMm: 0.8, invert: false, darkHigh: true, alphaMask: true };
+const grid = DH.raster.gridFor(60, 40);
+const base = DH.raster.toGray(synth(grid.w, grid.h));
 const t0 = Date.now();
-const lv = DH.stamp.levelMap(base, st, grid.p);
-const counts = DH.stamp.levelStats(lv, 2);
+const traced2 = DH.trace.traceMap(base, { mode: "gray", colours: 2, paths: 70, corners: 60, noiseMm: 0.8, ignoreWhite: true, darkHigh: true, alphaMask: true }, grid.p);
+const lv = traced2.lv;
+const counts = DH.raster.levelStats(lv, 2);
 ok(counts[1] > 0 && counts[2] > 0, "two levels present " + JSON.stringify(counts));
-ok(lv[10 * grid.w + 10] === 0, "speck removed by min feature size");
+ok(lv[10 * grid.w + 10] === 0, "speck removed by noise");
 
 // Image Trace on the same synthetic image
 for (const mode of ["bw", "gray", "colour"]) {
   const tr = DH.trace.traceMap(base, { mode, threshold: 128, colours: 3, paths: 60, corners: 50, noiseMm: 0.5, ignoreWhite: true, darkHigh: true, alphaMask: true }, grid.p);
-  const c = DH.stamp.levelStats(tr.lv, tr.levels);
+  const c = DH.raster.levelStats(tr.lv, tr.levels);
   ok(tr.levels >= 1 && c.slice(1).some((n) => n > 0) && tr.swatches.length === tr.levels, `trace ${mode}: ${tr.levels} levels ${JSON.stringify(c)} ${tr.swatches.join(" ")}`);
 }
 
@@ -45,7 +45,7 @@ const print = { nozzle: 0.4, lineWidth: 0.45, layerHeight: 0.2, layersPerLevel: 
 const layers = [];
 const off = [100, 100];
 for (let k = 1; k <= 2; k++) {
-  const field = DH.stamp.levelField(lv, grid.w, grid.h, k, grid.p);
+  const field = DH.raster.levelField(lv, grid.w, grid.h, k, grid.p);
   for (const pattern of ["satin", "tatami", "contour", "running", "outline_fill"]) {
     const paths = DH.stitches.pathsForLayer(field, { pattern, fill: "tatami", angle: 45, spacing: 0.45, outlinePasses: 1, dashed: pattern === "running", dashLen: 2, gapLen: 1 }, print, 0);
     ok(paths.length > 0, `level ${k} ${pattern}: ${paths.length} paths`);

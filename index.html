@@ -5,7 +5,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Digital Harvest Stitch</title>
-<meta name="description" content="Turn a pressed UV texture into stamp-like shapes and embroidery-style G-code for printing on textile with Bambu Lab printers.">
+<meta name="description" content="Turn a pressed UV texture into traced shapes and embroidery-style G-code for printing on textile with Bambu Lab printers.">
 <link rel="preload" href="fonts/Haskoy-variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/style.css">
 </head>
@@ -37,15 +37,11 @@
       <div class="fields" id="f-import"></div>
     </section>
 
-    <section class="panel" id="p-stamp">
-      <h2><span class="num">02</span> Transform</h2>
-      <div class="mode-switch" id="transformMode" role="group" aria-label="Transform method">
-        <button type="button" data-mode="stamp">stamp</button>
-        <button type="button" data-mode="trace">image trace</button>
-      </div>
-      <p class="hint" id="transformHint"></p>
-      <div class="fields" id="f-stamp"></div>
-      <div class="traced" id="tracedColours" hidden>
+    <section class="panel" id="p-trace">
+      <h2><span class="num">02</span> Image trace</h2>
+      <p class="hint">Like Illustrator's Image Trace: groups the picture into a few flat tones or colours with crisp edges. Each one becomes a height level.</p>
+      <div class="fields" id="f-trace"></div>
+      <div class="traced" id="tracedColours">
         <h3>Traced colours</h3>
         <div class="traced-swatches" id="tracedSwatches"></div>
         <button class="btn small" id="useTraced" type="button">use as filament colours</button>
@@ -87,7 +83,7 @@
         <h2><span class="num">05</span> Preview &amp; export</h2>
         <div class="tabs" id="viewTabs" role="tablist">
           <button type="button" role="tab" data-view="original">Original</button>
-          <button type="button" role="tab" data-view="stamp">Stamp</button>
+          <button type="button" role="tab" data-view="trace">trace</button>
           <button type="button" role="tab" data-view="paths" aria-selected="true">Toolpaths</button>
         </div>
       </div>
@@ -146,7 +142,7 @@
 <script src="profiles/materials.js"></script>
 <script src="js/template.js"></script>
 <script src="js/geometry.js"></script>
-<script src="js/stamp.js"></script>
+<script src="js/raster.js"></script>
 <script src="js/trace.js"></script>
 <script src="js/stitches.js"></script>
 <script src="js/gcode.js"></script>

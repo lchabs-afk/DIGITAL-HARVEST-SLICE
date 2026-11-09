@@ -57,6 +57,7 @@ button, input, select { font: inherit; color: inherit; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .preset-bar { display: flex; gap: 8px; padding: 14px 0 18px; border-top: 1px solid var(--ink); }
 .preset-bar .btn { flex: 1; }
+.preset-bar + .panel { border-top: 0; padding-top: 4px; }
 
 .layout {
   max-width: 1440px; margin: 0 auto; padding-top: 24px;
@@ -158,13 +159,7 @@ input[type="checkbox"]:checked::after { left: 18px; background: var(--ink); }
 .field.wide .seg button { height: 34px; padding: 0 12px; }
 .seg button[aria-pressed="true"] { background: var(--solid); border-color: var(--solid); color: var(--paper); }
 
-/* Stamp / image trace switch: stacked full-width boxes, the active one filled */
-.mode-switch { display: grid; gap: 10px; margin-top: 14px; }
-.mode-switch button {
-  height: 40px; border: 1px solid var(--ink); border-radius: 3px; background: transparent; cursor: pointer;
-  font-size: 12px; letter-spacing: 0.03em;
-}
-.mode-switch button[aria-pressed="true"] { background: var(--solid); border-color: var(--solid); color: var(--paper); }
+/* Traced colour swatches */
 .traced-swatches { display: flex; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 12px; font-size: 11.5px; color: var(--muted); }
 .traced-swatches span { display: inline-flex; align-items: center; gap: 6px; }
 .traced-swatches i { width: 18px; height: 18px; border: 1px solid var(--ink); border-radius: 3px; display: inline-block; }

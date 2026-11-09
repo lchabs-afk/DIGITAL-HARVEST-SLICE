@@ -1,6 +1,6 @@
-// Image → stamped level map → signed distance fields.
-// Pipeline: grayscale → levels/contrast → invert → blur → threshold/posterize →
-// despeckle. Level 0 is bare fabric; levels 1..N are printed, N is the tallest.
+// Raster helpers shared by the transform: working grid, grayscale/RGB copy,
+// despeckle, and the signed distance field of each height level.
+// Level 0 is bare fabric; levels 1..N are printed, N is the tallest.
 (function (DH) {
   "use strict";
   const G = DH.geom;
@@ -48,35 +48,6 @@
     }
   }
 
-  // s: {black, white, gamma, contrast, smoothMm, balance, levels, minFeatureMm,
-  //     invert, darkHigh, alphaMask}
-  function levelMap(base, s, p) {
-    const { w, h } = base, n = w * h;
-    const t = new Float32Array(n);
-    const lo = s.black / 255, hi = Math.max(lo + 1 / 255, s.white / 255);
-    const g = 1 / Math.max(0.05, s.gamma);
-    const c = s.contrast / 100, cf = c >= 0 ? 1 / Math.max(0.02, 1 - c) : 1 + c;
-    for (let i = 0; i < n; i++) {
-      let v = (base.gray[i] - lo) / (hi - lo);
-      v = Math.min(1, Math.max(0, v));
-      v = Math.pow(v, g);
-      v = (v - 0.5) * cf + 0.5;
-      v = Math.min(1, Math.max(0, v));
-      t[i] = s.invert ? 1 - v : v;
-    }
-    G.gaussianBlur(t, w, h, s.smoothMm / p);
-    const N = s.levels, B = Math.min(0.999, Math.max(0.001, s.balance / 100));
-    const lv = new Uint8Array(n);
-    for (let i = 0; i < n; i++) {
-      if (s.alphaMask && !base.alpha[i]) continue;
-      if (t[i] >= B) continue;
-      const band = Math.min(N - 1, Math.floor((t[i] / B) * N)); // 0 = darkest band
-      lv[i] = s.darkHigh ? N - band : band + 1;
-    }
-    despeckle(lv, w, h, N, Math.pow(s.minFeatureMm / p, 2));
-    return lv;
-  }
-
   // Remove islands and fill holes smaller than minArea pixels, level by level.
   function despeckle(lv, w, h, N, minArea) {
     const n = w * h;
@@ -106,5 +77,5 @@
     return count;
   }
 
-  DH.stamp = { gridFor, toGray, levelMap, levelField, levelStats, despeckle };
+  DH.raster = { gridFor, toGray, levelField, levelStats, despeckle };
 })(globalThis.DH = globalThis.DH || {});

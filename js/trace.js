@@ -1,7 +1,7 @@
-// Image Trace: an alternative to Stamp, modelled on Illustrator's Image Trace.
+// Image Trace, modelled on Illustrator's Image Trace.
 // Modes: black & white (threshold), grayscale (N tones) or colour (N colours,
 // k-means in OKLab). Each traced tone/colour becomes one height level, so the
-// rest of the pipeline (distance fields, stitches, G-code) is shared with Stamp.
+// rest of the pipeline (distance fields, stitches, G-code) works per level.
 (function (DH) {
   "use strict";
   const G = DH.geom;
@@ -132,7 +132,7 @@
       lv = out;
     }
     // Noise: drop islands and holes smaller than noiseMm².
-    DH.stamp.despeckle(lv, w, h, N, Math.pow(s.noiseMm / p, 2));
+    DH.raster.despeckle(lv, w, h, N, Math.pow(s.noiseMm / p, 2));
     return { lv, swatches, levels: N };
   }
 
