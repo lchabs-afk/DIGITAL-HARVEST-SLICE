@@ -325,19 +325,19 @@
 
   function renderPrint() {
     fill("f-print", [
-      { path: "print.lineWidth", label: "Line width", type: "number", min: 0.1, max: 2, step: 0.01, unit: "mm" },
-      { path: "print.layerHeight", label: "Layer height", type: "number", min: 0.04, max: 0.6, step: 0.01, unit: "mm" },
-      { path: "print.layersPerLevel", label: "Layers per level", type: "number", min: 1, max: 20, step: 1, unit: "" },
-      { path: "print.pauseLayer", label: "Pause before layer", type: "number", min: 0, max: 200, step: 1, unit: "", help: "0 = off. Sandwich mode: lay fabric over the first layers, then resume." },
-      { path: "print.firstLayerZ", label: "First layer Z", type: "number", min: 0, max: 1, step: 0.01, unit: "mm", on: "gcode", help: "0 lets the plastic sink into the weave." },
-      { path: "print.zOffset", label: "Z offset (fabric)", type: "number", min: -1, max: 5, step: 0.01, unit: "mm", on: "gcode" },
-      { path: "print.speed", label: "Print speed", type: "number", min: 5, max: 300, step: 1, unit: "mm/s", on: "gcode" },
-      { path: "print.firstSpeed", label: "First-layer speed", type: "number", min: 3, max: 100, step: 1, unit: "mm/s", on: "gcode" },
-      { path: "print.travelSpeed", label: "Travel speed", type: "number", min: 20, max: 500, step: 5, unit: "mm/s", on: "gcode" },
-      { path: "print.firstLayerFlow", label: "First-layer flow", type: "number", min: 0.5, max: 2, step: 0.01, unit: "×", on: "gcode" },
-      { path: "print.retractMinTravel", label: "Retract on travel over", type: "number", min: 0, max: 20, step: 0.5, unit: "mm", on: "gcode" },
-      { path: "print.zHop", label: "Z lift on retract", type: "number", min: 0, max: 3, step: 0.05, unit: "mm", on: "gcode" },
-    ], true);
+      { path: "print.lineWidth", label: "Line width", type: "range", min: 0.1, max: 2, step: 0.01, unit: "mm" },
+      { path: "print.layerHeight", label: "Layer height", type: "range", min: 0.04, max: 0.6, step: 0.01, unit: "mm" },
+      { path: "print.layersPerLevel", label: "Layers per level", type: "range", min: 1, max: 20, step: 1, unit: "" },
+      { path: "print.pauseLayer", label: "Pause before layer", type: "range", min: 0, max: 200, step: 1, unit: "" },
+      { path: "print.firstLayerZ", label: "First layer Z", type: "range", min: 0, max: 1, step: 0.01, unit: "mm", on: "gcode" },
+      { path: "print.zOffset", label: "Z offset (fabric)", type: "range", min: -1, max: 5, step: 0.01, unit: "mm", on: "gcode" },
+      { path: "print.speed", label: "Print speed", type: "range", min: 5, max: 300, step: 1, unit: "mm/s", on: "gcode" },
+      { path: "print.firstSpeed", label: "First-layer speed", type: "range", min: 3, max: 100, step: 1, unit: "mm/s", on: "gcode" },
+      { path: "print.travelSpeed", label: "Travel speed", type: "range", min: 20, max: 500, step: 5, unit: "mm/s", on: "gcode" },
+      { path: "print.firstLayerFlow", label: "First-layer flow", type: "range", min: 0.5, max: 2, step: 0.01, unit: "×", on: "gcode" },
+      { path: "print.retractMinTravel", label: "Retract on travel over", type: "range", min: 0, max: 20, step: 0.5, unit: "mm", on: "gcode" },
+      { path: "print.zHop", label: "Z lift on retract", type: "range", min: 0, max: 3, step: 0.05, unit: "mm", on: "gcode" },
+    ]);
   }
 
   function renderAll() {
