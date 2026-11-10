@@ -33,6 +33,7 @@ Copy the `.gcode` file to the root of the printer's SD card and start it from th
 - **Leveling:** the Bambu start sequence probes the bed, and the probe can misread fabric. With *Skip auto bed leveling* on, the `G29` probe commands inside the start G-code's bed-leveling block are commented out. Level once on the bare plate first.
 - **Colour changes:** when the next level has a different colour, the print lifts 5 mm and pauses with `M400 U1` at that level's first layer. Swap the filament on the printer, then resume.
 - **Sandwich mode:** *Pause before layer N* pauses the same way, so you can lay fabric over the first layers.
+- **Frame (optional):** in *Machine & material → Frame*, turn on *Frame on the plate* for a hoop around the fabric. The default is a 235 × 235 mm outer frame with 15 mm walls, 10 mm tall, which leaves 205 × 205 mm inside, centred on the bed. The nozzle stays a keep-out margin (5 mm by default) inside the wall, and export is blocked if the design reaches into it. Any move that crosses the wall happens above it (wall height + clearance, 12 mm by default). That covers the move in after the start routine, filament-change pauses and the lift before the end routine. *Pause to place the frame* stops once the printer's own start routine has finished, because that routine (purge line, calibration, leveling) moves low across the plate.
 
 ## How it works
 

@@ -67,6 +67,27 @@ for (const pr of DH.PRINTERS) {
     if (pr.id === "a1mini") require("fs").writeFileSync(path.join(__dirname, "out_a1mini.gcode"), r.text);
   } catch (e) { ok(false, pr.id + ": " + e.message); }
 }
+// Frame: every XY move outside the first point happens at or above safeZ until
+// the nozzle is inside; colour-change pauses and the end lift clear the wall.
+{
+  const a1 = DH.PRINTERS.find((p) => p.id === "a1");
+  const r = DH.gcode.build({ name: "frame", printer: a1, material: mat, print, layers, colours: [{ name: "a" }, { name: "b" }],
+    frame: { safeZ: 12, height: 10, pauseToPlace: true } });
+  const body = r.text.split("; MACHINE_START_GCODE_END")[1];
+  const lines = body.split("\n");
+  let z = null, firstLowXY = null, sawPlacePause = false;
+  for (const l of lines) {
+    if (/place the frame/.test(l)) sawPlacePause = true;
+    const mz = / Z([\d.]+)/.exec(l); if (/^G1/.test(l) && mz) z = +mz[1];
+    if (/^G1 X/.test(l) && firstLowXY === null) firstLowXY = z;
+  }
+  ok(sawPlacePause, "frame: pause to place the frame after the start routine");
+  ok(firstLowXY >= 12, "frame: first XY move into the frame happens at Z " + firstLowXY);
+  const pauseLift = /PAUSE_PRINT: change filament[^\n]*\nG1 Z([\d.]+)/.exec(body);
+  ok(pauseLift && +pauseLift[1] >= 12, "frame: colour-change pause lifts to Z " + (pauseLift && pauseLift[1]));
+  ok(/FRAME: lift clear of the frame before the end routine/.test(body), "frame: lifts before the end routine");
+}
+
 const sq = DH.gcode.build({ name: "square", printer: DH.PRINTERS[0], material: mat, print, layers: DH.gcode.testSquare(DH.PRINTERS[0], print), colours: [{ name: "a" }] });
 ok(sq.stats.layers === 2, "test square: 2 layers");
 process.exit(fails ? 1 : 0);

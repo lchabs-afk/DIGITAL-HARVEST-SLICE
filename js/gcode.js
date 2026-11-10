@@ -106,6 +106,15 @@
     const speedOf = (first) => Math.min(first ? s.firstSpeed : s.speed, maxSpeedVol, printer.maxSpeedXY);
     const layers = job.layers;
     const total = layers.length;
+    // Optional frame on the plate: {safeZ, pauseToPlace}. Every move that
+    // crosses its wall happens at safeZ, above the wall.
+    const frame = job.frame || null;
+    let framePrelude = "";
+    if (frame) {
+      frame.safeZ = Math.min(printer.maxHeight - 1, frame.safeZ);
+      framePrelude = "; FRAME: lift above the " + f3(frame.height) + " mm frame wall\nG1 Z" + f3(frame.safeZ) + " F600\n";
+      if (frame.pauseToPlace) framePrelude += "M400\n; PAUSE_PRINT: place the frame on the plate, then resume\n" + (printer.pauseGcode || "M400 U1") + "\n";
+    }
     const zOf = (j) => s.firstLayerZ + s.zOffset + j * s.layerHeight;
     const maxZ = total ? zOf(total - 1) : 0;
     const firstBox = bbox(layers.slice(0, 1));
@@ -134,6 +143,7 @@
 
     // Pass 2: write.
     const stats = { time: est, layers: total, perColour: {}, extrudeLen: 0, travelLen: 0, pauses: [] };
+    if (frame && frame.pauseToPlace) stats.pauses.push({ layer: 1, why: "place the frame after the start routine" });
     const preview = [];
     let cx = null, cy = null, cz = 0, retracted = false, elapsed = 0;
 
@@ -162,7 +172,7 @@
           : "pause before layer " + (j + 1);
         retract();
         emit("; PAUSE_PRINT: " + why);
-        emit("G1 Z" + f3(Math.min(printer.maxHeight, cz + 5)) + " F600");
+        emit("G1 Z" + f3(Math.min(printer.maxHeight, Math.max(cz + 5, frame ? frame.safeZ : 0))) + " F600");
         emit("M400");
         emit(printer.pauseGcode || "M400 U1");
         stats.pauses.push({ layer: j + 1, why });
@@ -182,6 +192,13 @@
         emit("M106 S" + Math.round((m.fanRest / 100) * 255));
       }
       retract();
+      if (j === 0 && frame && plan[0].length) {
+        // Still above the frame: move over the first point, then come down inside it.
+        const [fx, fy] = plan[0][0].pts[0];
+        emit("; FRAME: travel in above the frame wall");
+        emit("G1 X" + f3(fx) + " Y" + f3(fy) + " F" + Math.round(s.travelSpeed * 60));
+        cx = fx; cy = fy;
+      }
       emit("G1 Z" + f3(z) + " F" + Math.round(Math.min(printer.maxSpeedZ, 15) * 60));
       cz = z;
 
@@ -231,6 +248,7 @@
       preview.push({ z, colour, moves: new Float32Array(moves) });
     }
     retract();
+    if (frame) emit("G1 Z" + f3(frame.safeZ) + " F600 ; FRAME: lift clear of the frame before the end routine");
     const body = out.splice(0, out.length);
 
     // Assemble: header, start, body, end.
@@ -248,7 +266,9 @@
     let start = DH.template.render(printer.startGcode, vars);
     let levelingRemoved = 0;
     if (s.skipLeveling) { const r = stripLeveling(start); start = r.text; levelingRemoved = r.removed; }
-    const end = DH.template.render(printer.endGcode, Object.assign({}, vars, { layer_z: maxZ }));
+    // With a frame, the end routine's moves start from above the frame wall.
+    const endZ = frame ? Math.max(maxZ, frame.safeZ) : maxZ;
+    const end = DH.template.render(printer.endGcode, Object.assign({}, vars, { layer_z: endZ, max_layer_z: endZ }));
     stats.levelingRemoved = levelingRemoved;
 
     const head = [
@@ -284,6 +304,7 @@
     const text = head.join("\n") + "\n" +
       start.trim() + "\n; MACHINE_START_GCODE_END\n" +
       "G90\nG21\nM83 ; relative extrusion\nM106 S" + Math.round((m.fanFirst / 100) * 255) + "\n" +
+      framePrelude +
       body.join("\n") + "\n" +
       "; MACHINE_END_GCODE_START\n" + end.trim() + "\nM73 P100 R0\n; EXECUTABLE_BLOCK_END\n";
     return { text, preview, stats };

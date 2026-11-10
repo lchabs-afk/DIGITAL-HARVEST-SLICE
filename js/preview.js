@@ -75,6 +75,25 @@
       g.fillRect(X(a), Y(d), (c - a) * s, (d - b) * s);
     }
     g.globalAlpha = 1;
+    if (o.frame) {
+      // Frame wall as a hatched band, and the nozzle keep-out line inside it.
+      const R = (r) => [X(r[0]), Y(r[3]), (r[2] - r[0]) * s, (r[3] - r[1]) * s];
+      g.save();
+      g.beginPath();
+      g.rect(...R(o.frame.outer)); g.rect(...R(o.frame.inner));
+      g.clip("evenodd");
+      g.strokeStyle = ink; g.globalAlpha = 0.35; g.lineWidth = 1;
+      g.beginPath();
+      const [ox, oy, ow, oh] = R(o.frame.outer), step = 6 * dpr;
+      for (let k = -oh; k < ow; k += step) { g.moveTo(ox + k, oy + oh); g.lineTo(ox + k + oh, oy); }
+      g.stroke();
+      g.restore();
+      g.strokeStyle = ink; g.lineWidth = 1; g.globalAlpha = 0.9;
+      g.strokeRect(...R(o.frame.outer)); g.strokeRect(...R(o.frame.inner));
+      g.setLineDash([2 * dpr, 3 * dpr]); g.globalAlpha = 0.7;
+      g.strokeRect(...R(o.frame.safe));
+      g.setLineDash([]); g.globalAlpha = 1;
+    }
     if (o.box) {
       g.setLineDash([4 * dpr, 4 * dpr]); g.strokeStyle = muted; g.globalAlpha = 0.6;
       g.strokeRect(X(o.box[0]), Y(o.box[3]), (o.box[2] - o.box[0]) * s, (o.box[3] - o.box[1]) * s);

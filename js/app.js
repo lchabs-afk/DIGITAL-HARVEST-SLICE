@@ -15,6 +15,7 @@
       { name: "Indigo", hex: "#2f45b5" }, { name: "Bark", hex: "#5b4636" },
     ],
     colourChanges: true,
+    frame: { enabled: false, outerX: 235, outerY: 235, wall: 15, height: 10, margin: 5, clearance: 2, pauseToPlace: true },
     stitchSame: false,
     stitches: [
       Object.assign({}, STITCH_DEFAULT),
@@ -54,6 +55,35 @@
   const printer = () => DH.PRINTERS.find((p) => p.id === state.machine.printer) || DH.PRINTERS[0];
   // Number of height levels the trace produces.
   const levelCount = () => (state.trace.mode === "bw" ? 1 : state.trace.colours);
+
+  // Optional frame on the plate, centred on the bed. Returns rectangles
+  // [x0, y0, x1, y1] in bed mm: the outer edge, the inner edge, and the safe
+  // area the nozzle must stay inside (inner edge minus the keep-out margin).
+  function frameGeom() {
+    const f = state.frame;
+    if (!f.enabled) return null;
+    const pr = printer(), cx = pr.bed[0] / 2, cy = pr.bed[1] / 2;
+    const outer = [cx - f.outerX / 2, cy - f.outerY / 2, cx + f.outerX / 2, cy + f.outerY / 2];
+    const inner = [outer[0] + f.wall, outer[1] + f.wall, outer[2] - f.wall, outer[3] - f.wall];
+    const safe = [inner[0] + f.margin, inner[1] + f.margin, inner[2] - f.margin, inner[3] - f.margin];
+    return { outer, inner, safe, safeZ: f.height + f.clearance, height: f.height, pauseToPlace: f.pauseToPlace };
+  }
+  const inside = (b, r) => b[0] >= r[0] - 1e-6 && b[1] >= r[1] - 1e-6 && b[2] <= r[2] + 1e-6 && b[3] <= r[3] + 1e-6;
+  // A reason export must stop, or null.
+  function frameProblem(box) {
+    const fg = frameGeom();
+    if (!fg) return null;
+    const pr = printer();
+    if (fg.outer[0] < 0 || fg.outer[1] < 0 || fg.outer[2] > pr.bed[0] || fg.outer[3] > pr.bed[1])
+      return `The ${state.frame.outerX} × ${state.frame.outerY} mm frame is bigger than the ${pr.name} bed (${pr.bed[0]} × ${pr.bed[1]} mm).`;
+    if (fg.safe[2] <= fg.safe[0] || fg.safe[3] <= fg.safe[1]) return "The frame's wall and margin leave no room inside it.";
+    if (fg.safeZ > pr.maxHeight - 1) return "The frame is taller than this printer can clear.";
+    if (box && !inside(box, fg.safe)) {
+      const w = (fg.safe[2] - fg.safe[0]).toFixed(0), h = (fg.safe[3] - fg.safe[1]).toFixed(0);
+      return `The design reaches into the frame's keep-out zone. Keep it within the ${w} × ${h} mm area inside the frame: reduce the width or move the offsets.`;
+    }
+    return null;
+  }
 
   // ---------------------------------------------------------------- field builder
   const NEXT = { size: onSize, trace: onTrace, paths: onPaths, gcode: onGcode, none: () => {} };
@@ -217,6 +247,40 @@
     info.className = "hint";
     info.textContent = `Bed ${p.bed[0]} × ${p.bed[1]} mm · start/end G-code from Bambu Studio profile “${p.source}”.`;
     $("f-machine").appendChild(info);
+    renderFrame();
+  }
+
+  function renderFrame() {
+    const f = state.frame;
+    const specs = [
+      { path: "frame.enabled", label: "Frame on the plate", type: "check", on: "gcode", after: () => renderFrame(),
+        help: "A frame (hoop) around the fabric that the nozzle must never enter. Moves that cross its wall happen above it." },
+    ];
+    if (f.enabled) specs.push(
+      { path: "frame.outerX", label: "Outer width (X)", type: "range", min: 50, max: 350, step: 1, unit: "mm", on: "gcode", after: updateFrameLine },
+      { path: "frame.outerY", label: "Outer depth (Y)", type: "range", min: 50, max: 350, step: 1, unit: "mm", on: "gcode", after: updateFrameLine },
+      { path: "frame.wall", label: "Wall width", type: "range", min: 1, max: 50, step: 0.5, unit: "mm", on: "gcode", after: updateFrameLine },
+      { path: "frame.height", label: "Wall height", type: "range", min: 1, max: 40, step: 0.5, unit: "mm", on: "gcode", after: updateFrameLine },
+      { path: "frame.margin", label: "Keep-out margin inside the wall", type: "range", min: 0, max: 40, step: 0.5, unit: "mm", on: "gcode", after: updateFrameLine,
+        help: "Extra distance between the nozzle and the inner wall. The toolhead around the nozzle is wider, so raise this if it gets close to the wall." },
+      { path: "frame.clearance", label: "Clearance above the wall", type: "range", min: 0.5, max: 20, step: 0.5, unit: "mm", on: "gcode", after: updateFrameLine },
+      { path: "frame.pauseToPlace", label: "Pause to place the frame after the start routine", type: "check", on: "gcode",
+        help: "The printer's own start routine (purge line, calibration, leveling) moves low across the plate. With this on, the frame goes on only after it." },
+    );
+    fill("f-frame", specs);
+    if (f.enabled) {
+      const p = document.createElement("p");
+      p.className = "hint frame-line"; p.id = "frameLine";
+      $("f-frame").appendChild(p);
+      updateFrameLine();
+    }
+  }
+  function updateFrameLine() {
+    const el = $("frameLine"), fg = frameGeom();
+    if (!el || !fg) return;
+    const iw = fg.inner[2] - fg.inner[0], ih = fg.inner[3] - fg.inner[1];
+    const sw = fg.safe[2] - fg.safe[0], sh = fg.safe[3] - fg.safe[1];
+    el.textContent = `[ inside: ${iw.toFixed(0)} × ${ih.toFixed(0)} mm ]  [ nozzle area: ${Math.max(0, sw).toFixed(0)} × ${Math.max(0, sh).toFixed(0)} mm ]  [ crosses the wall at z ${fg.safeZ.toFixed(1)} mm ]`;
   }
 
   function materialOptions() {
@@ -457,7 +521,7 @@
       const pr = printer();
       result = DH.gcode.build({
         name: srcName, printer: pr, material: state.material, print: printSettings(), layers,
-        colours: state.colours,
+        colours: state.colours, frame: frameGeom(),
       });
       result.layers = layers;
       result.box = layers.length ? DH.gcode.bbox(layers) : null;
@@ -494,7 +558,7 @@
       bed: pr.bed, exclude: pr.excludeArea, box: [pl.x0, pl.y0, pl.x0 + pl.W, pl.y0 + pl.H], fit: result && result.box,
       layers: result ? result.preview : [], current: +$("layerSlider").value,
       showTravel: $("showTravel").checked, byLayer: $("colourByLayer").checked,
-      colours: state.colours, wholeBed: $("wholeBed").checked, lineWidth: state.print.lineWidth,
+      colours: state.colours, wholeBed: $("wholeBed").checked, lineWidth: state.print.lineWidth, frame: frameGeom(),
     });
   }
   function updateLayerLabel() {
@@ -575,6 +639,10 @@
       add("info", `The print pauses ${result.stats.pauses.length}× with M400 U1: ${list}.`);
     }
     if (s.pauseLayer > (result ? result.stats.layers : 0)) add("", `Pause before layer ${s.pauseLayer} never happens: the print has ${result ? result.stats.layers : 0} layers.`);
+    const fp = frameProblem(result && result.box);
+    if (fp) add("bad", fp);
+    if (state.frame.enabled && !state.frame.pauseToPlace)
+      add("", "Place the frame only after the printer's start routine: the purge line, calibration and leveling move low across the plate.");
     if (pr.multiNozzle) add("info", `${pr.name}: dual-nozzle start G-code is filled for one filament on one nozzle. Print the test square before a real job.`);
     if (state.machine.skipLeveling && result && !result.stats.levelingRemoved) add("", "No bed-leveling block was found in this printer's start G-code; nothing was removed.");
   }
@@ -598,6 +666,8 @@
     if (stale) { clearTimeout(genTimer); await generate(); }
     if (!result) { toast(error ? "Fix the error shown in the preview panel first." : (src ? "Nothing to export yet." : "Load an image first.")); return; }
     if (!result.stats.extrudeLen) { toast("Nothing to print: adjust the trace settings."); return; }
+    const fp = frameProblem(result.box);
+    if (fp) { toast("Not exported: " + fp); return; }
     const name = safeName($("fileName").value) + ".gcode";
     download(name, result.text);
     toast(`Saved ${name}`);
@@ -606,8 +676,10 @@
   function exportTestSquare() {
     const pr = printer();
     const s = Object.assign(printSettings(), { firstLayerZ: state.print.layerHeight, zOffset: 0, pauseLayer: 0, colourChanges: false });
+    const c = [pr.bed[0] / 2, pr.bed[1] / 2], fp = frameProblem([c[0] - 10, c[1] - 10, c[0] + 10, c[1] + 10]);
+    if (fp) { toast("Not exported: " + fp); return; }
     try {
-      const r = DH.gcode.build({ name: "test square", printer: pr, material: state.material, print: s, layers: DH.gcode.testSquare(pr, s), colours: state.colours });
+      const r = DH.gcode.build({ name: "test square", printer: pr, material: state.material, print: s, layers: DH.gcode.testSquare(pr, s), colours: state.colours, frame: frameGeom() });
       const name = `test_square_${pr.id}_${state.material.type.toLowerCase()}.gcode`;
       download(name, r.text);
       toast(`Saved ${name}`);
