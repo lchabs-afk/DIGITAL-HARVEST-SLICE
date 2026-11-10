@@ -75,12 +75,12 @@
     if (!fg) return null;
     const pr = printer();
     if (fg.outer[0] < 0 || fg.outer[1] < 0 || fg.outer[2] > pr.bed[0] || fg.outer[3] > pr.bed[1])
-      return `The ${state.frame.outerX} × ${state.frame.outerY} mm frame is bigger than the ${pr.name} bed (${pr.bed[0]} × ${pr.bed[1]} mm).`;
-    if (fg.safe[2] <= fg.safe[0] || fg.safe[3] <= fg.safe[1]) return "The frame's wall and margin leave no room inside it.";
-    if (fg.safeZ > pr.maxHeight - 1) return "The frame is taller than this printer can clear.";
+      return `The ${state.frame.outerX} × ${state.frame.outerY} mm magnet frame is bigger than the ${pr.name} bed (${pr.bed[0]} × ${pr.bed[1]} mm).`;
+    if (fg.safe[2] <= fg.safe[0] || fg.safe[3] <= fg.safe[1]) return "The magnet band and margin leave no room inside the frame.";
+    if (fg.safeZ > pr.maxHeight - 1) return "The magnets are taller than this printer can clear.";
     if (box && !inside(box, fg.safe)) {
       const w = (fg.safe[2] - fg.safe[0]).toFixed(0), h = (fg.safe[3] - fg.safe[1]).toFixed(0);
-      return `The design reaches into the frame's keep-out zone. Keep it within the ${w} × ${h} mm area inside the frame: reduce the width or move the offsets.`;
+      return `The design reaches into the magnet keep-out zone. Keep it within the ${w} × ${h} mm area inside the magnets: reduce the width or move the offsets.`;
     }
     return null;
   }
@@ -253,19 +253,19 @@
   function renderFrame() {
     const f = state.frame;
     const specs = [
-      { path: "frame.enabled", label: "Frame on the plate", type: "check", on: "gcode", after: () => renderFrame(),
-        help: "A frame (hoop) around the fabric that the nozzle must never enter. Moves that cross its wall happen above it." },
+      { path: "frame.enabled", label: "Magnet keep-out frame", type: "check", on: "gcode", after: () => renderFrame(),
+        help: "An imaginary frame around the plate where the magnets holding the fabric sit. The nozzle never goes down inside it, and any move that crosses it happens above the magnets." },
     ];
     if (f.enabled) specs.push(
-      { path: "frame.outerX", label: "Outer width (X)", type: "range", min: 50, max: 350, step: 1, unit: "mm", on: "gcode", after: updateFrameLine },
-      { path: "frame.outerY", label: "Outer depth (Y)", type: "range", min: 50, max: 350, step: 1, unit: "mm", on: "gcode", after: updateFrameLine },
-      { path: "frame.wall", label: "Wall width", type: "range", min: 1, max: 50, step: 0.5, unit: "mm", on: "gcode", after: updateFrameLine },
-      { path: "frame.height", label: "Wall height", type: "range", min: 1, max: 40, step: 0.5, unit: "mm", on: "gcode", after: updateFrameLine },
-      { path: "frame.margin", label: "Keep-out margin inside the wall", type: "range", min: 0, max: 40, step: 0.5, unit: "mm", on: "gcode", after: updateFrameLine,
-        help: "Extra distance between the nozzle and the inner wall. The toolhead around the nozzle is wider, so raise this if it gets close to the wall." },
-      { path: "frame.clearance", label: "Clearance above the wall", type: "range", min: 0.5, max: 20, step: 0.5, unit: "mm", on: "gcode", after: updateFrameLine },
-      { path: "frame.pauseToPlace", label: "Pause to place the frame after the start routine", type: "check", on: "gcode",
-        help: "The printer's own start routine (purge line, calibration, leveling) moves low across the plate. With this on, the frame goes on only after it." },
+      { path: "frame.outerX", label: "Frame outer width (X)", type: "range", min: 50, max: 350, step: 1, unit: "mm", on: "gcode", after: updateFrameLine },
+      { path: "frame.outerY", label: "Frame outer depth (Y)", type: "range", min: 50, max: 350, step: 1, unit: "mm", on: "gcode", after: updateFrameLine },
+      { path: "frame.wall", label: "Magnet band width", type: "range", min: 1, max: 50, step: 0.5, unit: "mm", on: "gcode", after: updateFrameLine },
+      { path: "frame.height", label: "Magnet height", type: "range", min: 1, max: 40, step: 0.5, unit: "mm", on: "gcode", after: updateFrameLine },
+      { path: "frame.margin", label: "Extra margin inside the band", type: "range", min: 0, max: 40, step: 0.5, unit: "mm", on: "gcode", after: updateFrameLine,
+        help: "Extra distance between the nozzle and the magnets. The toolhead around the nozzle is wider, so raise this if it gets close to them." },
+      { path: "frame.clearance", label: "Clearance above the magnets", type: "range", min: 0.5, max: 20, step: 0.5, unit: "mm", on: "gcode", after: updateFrameLine },
+      { path: "frame.pauseToPlace", label: "Pause to lay the fabric and magnets after the start routine", type: "check", on: "gcode",
+        help: "The printer's own start routine (purge line, calibration, leveling) moves low across the plate and could hit magnets. With this on, the print pauses after it, raised above magnet height, so you can put them on then." },
     );
     fill("f-frame", specs);
     if (f.enabled) {
@@ -280,7 +280,7 @@
     if (!el || !fg) return;
     const iw = fg.inner[2] - fg.inner[0], ih = fg.inner[3] - fg.inner[1];
     const sw = fg.safe[2] - fg.safe[0], sh = fg.safe[3] - fg.safe[1];
-    el.textContent = `[ inside: ${iw.toFixed(0)} × ${ih.toFixed(0)} mm ]  [ nozzle area: ${Math.max(0, sw).toFixed(0)} × ${Math.max(0, sh).toFixed(0)} mm ]  [ crosses the wall at z ${fg.safeZ.toFixed(1)} mm ]`;
+    el.textContent = `[ inside: ${iw.toFixed(0)} × ${ih.toFixed(0)} mm ]  [ nozzle area: ${Math.max(0, sw).toFixed(0)} × ${Math.max(0, sh).toFixed(0)} mm ]  [ crosses the magnets at z ${fg.safeZ.toFixed(1)} mm ]`;
   }
 
   function materialOptions() {
@@ -642,7 +642,7 @@
     const fp = frameProblem(result && result.box);
     if (fp) add("bad", fp);
     if (state.frame.enabled && !state.frame.pauseToPlace)
-      add("", "Place the frame only after the printer's start routine: the purge line, calibration and leveling move low across the plate.");
+      add("", "The printer's start routine (purge line, calibration, leveling) moves low across the plate and could hit magnets that are already on. Lay the fabric and magnets after it, or turn on the pause.");
     if (pr.multiNozzle) add("info", `${pr.name}: dual-nozzle start G-code is filled for one filament on one nozzle. Print the test square before a real job.`);
     if (state.machine.skipLeveling && result && !result.stats.levelingRemoved) add("", "No bed-leveling block was found in this printer's start G-code; nothing was removed.");
   }

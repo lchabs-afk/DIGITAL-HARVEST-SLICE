@@ -77,15 +77,15 @@ for (const pr of DH.PRINTERS) {
   const lines = body.split("\n");
   let z = null, firstLowXY = null, sawPlacePause = false;
   for (const l of lines) {
-    if (/place the frame/.test(l)) sawPlacePause = true;
+    if (/lay the fabric and magnets/.test(l)) sawPlacePause = true;
     const mz = / Z([\d.]+)/.exec(l); if (/^G1/.test(l) && mz) z = +mz[1];
     if (/^G1 X/.test(l) && firstLowXY === null) firstLowXY = z;
   }
-  ok(sawPlacePause, "frame: pause to place the frame after the start routine");
+  ok(sawPlacePause, "frame: pause to lay fabric and magnets after the start routine");
   ok(firstLowXY >= 12, "frame: first XY move into the frame happens at Z " + firstLowXY);
   const pauseLift = /PAUSE_PRINT: change filament[^\n]*\nG1 Z([\d.]+)/.exec(body);
   ok(pauseLift && +pauseLift[1] >= 12, "frame: colour-change pause lifts to Z " + (pauseLift && pauseLift[1]));
-  ok(/FRAME: lift clear of the frame before the end routine/.test(body), "frame: lifts before the end routine");
+  ok(/FRAME: lift clear of the magnets before the end routine/.test(body), "frame: lifts before the end routine");
 }
 
 const sq = DH.gcode.build({ name: "square", printer: DH.PRINTERS[0], material: mat, print, layers: DH.gcode.testSquare(DH.PRINTERS[0], print), colours: [{ name: "a" }] });

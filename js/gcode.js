@@ -106,14 +106,14 @@
     const speedOf = (first) => Math.min(first ? s.firstSpeed : s.speed, maxSpeedVol, printer.maxSpeedXY);
     const layers = job.layers;
     const total = layers.length;
-    // Optional frame on the plate: {safeZ, pauseToPlace}. Every move that
-    // crosses its wall happens at safeZ, above the wall.
+    // Optional magnet keep-out frame around the plate: {safeZ, pauseToPlace}.
+    // Every move that crosses the magnet band happens at safeZ, above the magnets.
     const frame = job.frame || null;
     let framePrelude = "";
     if (frame) {
       frame.safeZ = Math.min(printer.maxHeight - 1, frame.safeZ);
-      framePrelude = "; FRAME: lift above the " + f3(frame.height) + " mm frame wall\nG1 Z" + f3(frame.safeZ) + " F600\n";
-      if (frame.pauseToPlace) framePrelude += "M400\n; PAUSE_PRINT: place the frame on the plate, then resume\n" + (printer.pauseGcode || "M400 U1") + "\n";
+      framePrelude = "; FRAME: lift above the " + f3(frame.height) + " mm magnets\nG1 Z" + f3(frame.safeZ) + " F600\n";
+      if (frame.pauseToPlace) framePrelude += "M400\n; PAUSE_PRINT: lay the fabric and magnets on the plate, then resume\n" + (printer.pauseGcode || "M400 U1") + "\n";
     }
     const zOf = (j) => s.firstLayerZ + s.zOffset + j * s.layerHeight;
     const maxZ = total ? zOf(total - 1) : 0;
@@ -143,7 +143,7 @@
 
     // Pass 2: write.
     const stats = { time: est, layers: total, perColour: {}, extrudeLen: 0, travelLen: 0, pauses: [] };
-    if (frame && frame.pauseToPlace) stats.pauses.push({ layer: 1, why: "place the frame after the start routine" });
+    if (frame && frame.pauseToPlace) stats.pauses.push({ layer: 1, why: "lay the fabric and magnets after the start routine" });
     const preview = [];
     let cx = null, cy = null, cz = 0, retracted = false, elapsed = 0;
 
@@ -195,7 +195,7 @@
       if (j === 0 && frame && plan[0].length) {
         // Still above the frame: move over the first point, then come down inside it.
         const [fx, fy] = plan[0][0].pts[0];
-        emit("; FRAME: travel in above the frame wall");
+        emit("; FRAME: travel in above the magnets");
         emit("G1 X" + f3(fx) + " Y" + f3(fy) + " F" + Math.round(s.travelSpeed * 60));
         cx = fx; cy = fy;
       }
@@ -248,7 +248,7 @@
       preview.push({ z, colour, moves: new Float32Array(moves) });
     }
     retract();
-    if (frame) emit("G1 Z" + f3(frame.safeZ) + " F600 ; FRAME: lift clear of the frame before the end routine");
+    if (frame) emit("G1 Z" + f3(frame.safeZ) + " F600 ; FRAME: lift clear of the magnets before the end routine");
     const body = out.splice(0, out.length);
 
     // Assemble: header, start, body, end.
@@ -266,7 +266,7 @@
     let start = DH.template.render(printer.startGcode, vars);
     let levelingRemoved = 0;
     if (s.skipLeveling) { const r = stripLeveling(start); start = r.text; levelingRemoved = r.removed; }
-    // With a frame, the end routine's moves start from above the frame wall.
+    // With magnets on the plate, the end routine's moves start from above them.
     const endZ = frame ? Math.max(maxZ, frame.safeZ) : maxZ;
     const end = DH.template.render(printer.endGcode, Object.assign({}, vars, { layer_z: endZ, max_layer_z: endZ }));
     stats.levelingRemoved = levelingRemoved;
