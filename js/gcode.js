@@ -2,8 +2,8 @@
 // Relative extrusion (M83). E = width × height × length / filament area × flow.
 (function (DH) {
   "use strict";
-  const TYPES = ["Travel", "Outline", "Satin", "Tatami", "Contour", "Running"];
-  const FEATURE = { Outline: "Outer wall", Satin: "Sparse infill", Tatami: "Internal solid infill", Contour: "Inner wall", Running: "Outer wall" };
+  const TYPES = ["Travel", "Outline", "Satin", "Tatami", "Contour", "Running", "Dot"];
+  const FEATURE = { Outline: "Outer wall", Satin: "Sparse infill", Tatami: "Internal solid infill", Contour: "Inner wall", Running: "Outer wall", Dot: "Sparse infill" };
 
   const f3 = (v) => (Math.round(v * 1000) / 1000).toFixed(3).replace(/\.?0+$/, "") || "0";
   const f5 = (v) => (Math.round(v * 100000) / 100000).toFixed(5).replace(/\.?0+$/, "") || "0";
@@ -11,6 +11,8 @@
   // Nearest-neighbour ordering. Closed loops may start at any vertex,
   // open paths may be reversed.
   function orderPaths(paths, start) {
+    // Dots arrive already in serpentine order (there can be tens of thousands).
+    if (paths.length && paths.every((p) => p.keepOrder)) return paths.map((p) => ({ pts: p.pts, type: p.type, d: p.d }));
     const left = paths.slice();
     const out = [];
     let cx = start[0], cy = start[1];
@@ -34,7 +36,7 @@
       let pts;
       if (p.closed) pts = p.pts.slice(bestIdx).concat(p.pts.slice(0, bestIdx + 1));
       else pts = bestRev ? p.pts.slice().reverse() : p.pts;
-      out.push({ pts, type: p.type });
+      out.push({ pts, type: p.type, d: p.d });
       const last = pts[pts.length - 1];
       cx = last[0]; cy = last[1];
     }
@@ -133,7 +135,7 @@
       let t = 0, cx = null, cy = null;
       for (const p of ordered) {
         if (cx !== null) t += Math.hypot(p.pts[0][0] - cx, p.pts[0][1] - cy) / s.travelSpeed + 0.15;
-        t += DH.geom.polylineLength(p.pts, false) / sp;
+        t += p.type === "Dot" ? 0.3 : DH.geom.polylineLength(p.pts, false) / sp; // dot: lift, lower, extrude, retract
         const l = p.pts[p.pts.length - 1]; cx = l[0]; cy = l[1];
       }
       t = t * 1.15 + 2; // acceleration and layer-change allowance
@@ -142,7 +144,7 @@
     });
 
     // Pass 2: write.
-    const stats = { time: est, layers: total, perColour: {}, extrudeLen: 0, travelLen: 0, pauses: [] };
+    const stats = { time: est, layers: total, perColour: {}, extrudeLen: 0, travelLen: 0, pauses: [], dots: 0 };
     if (frame && frame.pauseToPlace) stats.pauses.push({ layer: 1, why: "lay the fabric and magnets after the start routine" });
     const preview = [];
     let cx = null, cy = null, cz = 0, retracted = false, elapsed = 0;
@@ -161,7 +163,7 @@
     let prevColour = null;
     for (let j = 0; j < total; j++) {
       const L = layers[j], z = zOf(j), first = j === 0;
-      const moves = [];
+      const moves = [], dotList = [];
       const colour = L.colour;
       // Colour change or requested pause happens before this layer.
       const colourChange = s.colourChanges && prevColour !== null && colour !== prevColour;
@@ -205,11 +207,33 @@
       const sp = speedOf(first);
       const flow = m.flow * (first ? s.firstLayerFlow : 1);
       const ePerMm = (s.lineWidth * s.layerHeight * flow) / fArea;
+      // Dots are pushed out slowly so the blob spreads instead of shooting out.
+      const dotFeed = Math.max(30, Math.round((Math.min(m.maxVolSpeed, 3) / fArea) * 60));
       const key = colour;
       stats.perColour[key] = stats.perColour[key] || { colour, filamentMm: 0 };
       let curType = null;
 
+      const zMove = " F" + Math.round(Math.min(printer.maxSpeedZ, 15) * 60);
       for (const p of plan[j]) {
+        if (p.type === "Dot") {
+          // Lift, travel, come down, push out a blob without moving, and leave.
+          const [x, y] = p.pts[0];
+          if (p.type !== curType) { emit(";TYPE:Dot"); emit("; FEATURE: " + FEATURE.Dot); curType = p.type; }
+          retract();
+          emit("G1 Z" + f3(z + Math.max(s.zHop, 0.4)) + zMove);
+          emit("G1 X" + f3(x) + " Y" + f3(y) + " F" + Math.round(s.travelSpeed * 60));
+          emit("G1 Z" + f3(z) + zMove);
+          unretract();
+          const vol = Math.PI * ((p.d || s.lineWidth) / 2) ** 2 * s.layerHeight * flow;
+          const e = vol / fArea;
+          emit("G1 E" + f5(e) + " F" + dotFeed);
+          if (cx !== null) { moves.push(cx, cy, x, y, 0); stats.travelLen += Math.hypot(x - cx, y - cy); }
+          dotList.push(x, y, p.d);
+          stats.dots++;
+          stats.perColour[key].filamentMm += e;
+          cx = x; cy = y;
+          continue;
+        }
         const [sx, sy] = p.pts[0];
         const d = cx === null ? Infinity : Math.hypot(sx - cx, sy - cy);
         if (d > 0.001) {
@@ -245,7 +269,7 @@
         cx = px; cy = py;
       }
       elapsed += layerTime[j];
-      preview.push({ z, colour, moves: new Float32Array(moves) });
+      preview.push({ z, colour, moves: new Float32Array(moves), dots: new Float32Array(dotList) });
     }
     retract();
     if (frame) emit("G1 Z" + f3(frame.safeZ) + " F600 ; FRAME: lift clear of the magnets before the end routine");

@@ -4,7 +4,8 @@
   const $ = (id) => document.getElementById(id);
 
   // ---------------------------------------------------------------- state
-  const STITCH_DEFAULT = { pattern: "outline_fill", fill: "tatami", angle: 45, spacing: 0.45, rotate: 90, outlinePasses: 1, dashed: false, dashLen: 2, gapLen: 1 };
+  const STITCH_DEFAULT = { pattern: "outline_fill", fill: "tatami", angle: 45, spacing: 0.45, rotate: 90, outlinePasses: 1, dashed: false, dashLen: 2, gapLen: 1,
+    dotLayout: "hex", dotSize: 1.2, dotSpacing: 1.8, dotTone: true };
   const DEFAULTS = {
     import: { widthMm: 80, offX: 0, offY: 0, mirror: false },
     trace: { mode: "colour", threshold: 128, colours: 3, paths: 60, corners: 50, noiseMm: 0.5, ignoreWhite: true, darkHigh: true, alphaMask: true },
@@ -371,6 +372,17 @@
     ];
     if (pat === "outline_fill") specs.push({ path: base + "fill", label: "Fill after the outline", type: "select", options: [["tatami", "Fill / tatami"], ["satin", "Satin"], ["contour", "Contour"]], after: () => renderStitch() });
     const fillKind = pat === "outline_fill" ? st.fill : pat;
+    if (pat === "dots") {
+      specs.push(
+        { path: base + "dotLayout", label: "Layout", type: "seg", wide: true, options: [["grid", "grid"], ["hex", "hex"], ["scatter", "scatter"]], after: () => renderStitch() },
+        { path: base + "dotSize", label: "Dot size", type: "range", min: 0.3, max: 5, step: 0.05, unit: "mm", help: "Diameter of each blob of plastic." },
+        { path: base + "dotSpacing", label: "Dot spacing", type: "range", min: 0.4, max: 10, step: 0.05, unit: "mm", help: "Distance between dot centres. Bigger than the dot size leaves fabric showing between them." },
+        { path: base + "dotTone", label: "Follow the picture's tones", type: "check", help: st.dotLayout === "scatter" ? "Dots bunch up in dark areas and thin out in light ones (stippling)." : "Dots grow in dark areas and shrink in light ones (halftone)." },
+      );
+      if (st.dotLayout !== "scatter") specs.push({ path: base + "angle", label: "Grid angle", type: "range", min: -90, max: 90, step: 1, unit: "°" });
+      fill("f-stitch", specs);
+      return;
+    }
     if (pat === "running" || pat === "outline_fill") specs.push({ path: base + "outlinePasses", label: "Outline passes", type: "range", min: 1, max: 6, step: 1, unit: "" });
     if (fillKind === "satin" || fillKind === "tatami") {
       specs.push({ path: base + "angle", label: "Angle", type: "range", min: -90, max: 90, step: 1, unit: "°" });
@@ -487,6 +499,7 @@
     for (let k = 1; k <= presentLevels; k++) {
       if (!fields[k]) {
         fields[k] = DH.raster.levelField(lv, grid.w, grid.h, k, grid.p);
+        if (fields[k]) fields[k].tone = base.gray; // for dots that follow the picture's tones
         await tick();
         if (token !== genToken) return null;
       }
@@ -498,7 +511,7 @@
         if (!pathCache[key]) {
           const raw = fields[k] ? DH.stitches.pathsForLayer(fields[k], st, s, ang) : [];
           pathCache[key] = raw.map((p) => ({
-            closed: p.closed, type: p.type,
+            closed: p.closed, type: p.type, d: p.d, keepOrder: p.keepOrder,
             pts: p.pts.map(([x, y]) => [pl.x0 + (state.import.mirror ? pl.W - x : x), pl.y0 + y]),
           }));
           await tick();
@@ -612,6 +625,7 @@
       const pc = s.perColour[k], c = state.colours[pc.colour];
       add(escapeHtml(c.name.toLowerCase()), `${pc.grams.toFixed(1)} g`, c.hex);
     }
+    if (s.dots) add("dots", s.dots.toLocaleString("en"));
     add("pauses", s.pauses.length);
   }
 
@@ -627,7 +641,7 @@
       const [a, b, c, d] = pr.excludeArea;
       if (pl.x0 < c && pl.x0 + pl.W > a && pl.y0 < d && pl.y0 + pl.H > b) add("", "The design overlaps the printer's excluded corner (the purge chute area).");
     }
-    if (!presentLevels || (result && !result.stats.extrudeLen)) add("bad", "Nothing to print: change the threshold or colours, turn off ignore white, or lower the noise.");
+    if (!presentLevels || (result && !result.stats.extrudeLen && !result.stats.dots)) add("bad", "Nothing to print: change the threshold or colours, turn off ignore white, or lower the noise.");
     const z1 = s.firstLayerZ + s.zOffset;
     if (z1 < s.layerHeight * 0.5) add("info", `Layer 1 prints with the nozzle at Z ${z1.toFixed(2)} mm. That's meant for fabric; on a bare plate the nozzle would block. Set Z offset to your fabric's compressed thickness if needed.`);
     const noz = state.machine.nozzle;
@@ -665,7 +679,7 @@
   async function exportGcode() {
     if (stale) { clearTimeout(genTimer); await generate(); }
     if (!result) { toast(error ? "Fix the error shown in the preview panel first." : (src ? "Nothing to export yet." : "Load an image first.")); return; }
-    if (!result.stats.extrudeLen) { toast("Nothing to print: adjust the trace settings."); return; }
+    if (!result.stats.extrudeLen && !result.stats.dots) { toast("Nothing to print: adjust the trace settings."); return; }
     const fp = frameProblem(result.box);
     if (fp) { toast("Not exported: " + fp); return; }
     const name = safeName($("fileName").value) + ".gcode";

@@ -10,7 +10,84 @@
     contour: { label: "Contour", outline: false, fill: "contour" },
     running: { label: "Running stitch", outline: true, fill: null },
     outline_fill: { label: "Outline + fill", outline: true, fill: "choice" },
+    dots: { label: "Dots (pointillism)", outline: false, fill: "dots" },
   };
+
+  function rng(seed) { return () => ((seed = (seed * 16807) % 2147483647) / 2147483647); }
+
+  // Pointillism: single dots of extruded plastic. Each dot is a one-point
+  // path {pts:[[x,y]], type:"Dot", d} in design mm.
+  //   grid / hex: dots on a regular grid (rotated by st.angle); with tones on,
+  //               dot size follows the picture's darkness (halftone).
+  //   scatter:    random dots that keep their distance (Poisson disk); with
+  //               tones on, they bunch up in dark areas (stippling).
+  // Positions don't depend on the layer, so dots stack into columns.
+  function dots(field, st) {
+    const { sdf, w: W, h: H, p, tone } = field;
+    const d0 = Math.max(0.1, st.dotSize), s0 = Math.max(d0 * 0.5, st.dotSpacing);
+    const at = (arr, x, y) => {
+      const i = Math.round(x / p - 0.5), j = Math.round(H - y / p - 0.5);
+      return i < 0 || j < 0 || i >= W || j >= H ? null : arr[j * W + i];
+    };
+    const dark = (x, y) => { const g = tone ? at(tone, x, y) : null; return g === null ? 1 : 1 - g; };
+    // A dot fits if its centre is at least a quarter of its diameter inside the
+    // outline, so thin shapes still get dots (a blob may bulge out slightly).
+    const fits = (x, y, d) => { const v = at(sdf, x, y); return v !== null && v >= d / 4; };
+    const out = [];
+    const Wmm = W * p, Hmm = H * p;
+
+    if (st.dotLayout === "scatter") {
+      const rand = rng(1234567);
+      const rOf = (x, y) => (st.dotTone ? s0 * (0.65 + 1.6 * (1 - dark(x, y))) : s0);
+      const rMin = st.dotTone ? s0 * 0.65 : s0, rMax = st.dotTone ? s0 * 2.25 : s0;
+      const cell = rMin / Math.SQRT2, gw = Math.ceil(Wmm / cell) + 1, gh = Math.ceil(Hmm / cell) + 1;
+      const grid = new Int32Array(gw * gh).fill(-1);
+      const pts = [];
+      const reach = Math.ceil(rMax / cell);
+      const tries = Math.min(600000, Math.ceil(((Wmm * Hmm) / (rMin * rMin)) * 4));
+      for (let t = 0; t < tries; t++) {
+        const x = rand() * Wmm, y = rand() * Hmm;
+        if (!fits(x, y, d0)) continue;
+        const r = rOf(x, y), gx = Math.floor(x / cell), gy = Math.floor(y / cell);
+        let ok = true;
+        for (let yy = Math.max(0, gy - reach); ok && yy <= Math.min(gh - 1, gy + reach); yy++) {
+          for (let xx = Math.max(0, gx - reach); xx <= Math.min(gw - 1, gx + reach); xx++) {
+            const k = grid[yy * gw + xx];
+            if (k >= 0 && Math.hypot(pts[k][0] - x, pts[k][1] - y) < r) { ok = false; break; }
+          }
+        }
+        if (!ok) continue;
+        if (grid[gy * gw + gx] >= 0) continue; // cell already taken (cell < rMin, so rare)
+        grid[gy * gw + gx] = pts.length;
+        pts.push([x, y]);
+      }
+      // Serpentine order in bands one spacing tall: short travels, no sorting later.
+      const band = (q) => Math.floor(q[1] / s0);
+      pts.sort((a, b) => band(a) - band(b) || (band(a) % 2 ? b[0] - a[0] : a[0] - b[0]));
+      for (const q of pts) out.push({ pts: [q], closed: false, type: "Dot", d: d0, keepOrder: true });
+      return out;
+    }
+
+    // grid or hex, rotated about the design centre
+    const a = ((st.angle || 0) * Math.PI) / 180, ca = Math.cos(a), sa = Math.sin(a);
+    const cx = Wmm / 2, cy = Hmm / 2, R = Math.hypot(Wmm, Hmm) / 2 + s0;
+    const hex = st.dotLayout === "hex";
+    const rowStep = hex ? (s0 * Math.sqrt(3)) / 2 : s0;
+    let row = 0;
+    for (let v = -R; v <= R; v += rowStep, row++) {
+      const shift = hex && row % 2 ? s0 / 2 : 0;
+      const line = [];
+      for (let u = -R + shift; u <= R; u += s0) {
+        const x = cx + u * ca - v * sa, y = cy + u * sa + v * ca;
+        const d = st.dotTone ? d0 * (0.35 + 0.65 * dark(x, y)) : d0;
+        if (st.dotTone && d < d0 * 0.4) continue; // lightest areas stay bare
+        if (fits(x, y, d)) line.push({ pts: [[x, y]], closed: false, type: "Dot", d, keepOrder: true });
+      }
+      if (row % 2) line.reverse();
+      out.push(...line);
+    }
+    return out;
+  }
 
   // Contours of the field at `depth` mm inside the outline, in bed coordinates
   // relative to the design's bottom-left corner.
@@ -128,6 +205,7 @@
     const pat = PATTERNS[st.pattern] || PATTERNS.tatami;
     const passes = pat.outline ? Math.max(1, st.outlinePasses) : 0;
     const fillKind = pat.fill === "choice" ? st.fill : pat.fill;
+    if (fillKind === "dots") return dots(field, st);
     const paths = [];
     for (let i = 0; i < passes; i++) {
       for (const loop of contoursAt(field, (i + 0.5) * w, tol, minLen)) {
@@ -156,5 +234,5 @@
     return paths.concat(fill);
   }
 
-  DH.stitches = { PATTERNS, pathsForLayer, contoursAt, dash };
+  DH.stitches = { PATTERNS, pathsForLayer, contoursAt, dash, dots };
 })(globalThis.DH = globalThis.DH || {});

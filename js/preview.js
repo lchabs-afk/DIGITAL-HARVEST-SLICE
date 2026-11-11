@@ -117,6 +117,16 @@
         lx = mv[i + 2]; ly = mv[i + 3];
       }
       g.stroke();
+      if (L.dots && L.dots.length) {
+        g.fillStyle = col;
+        g.beginPath();
+        for (let i = 0; i < L.dots.length; i += 3) {
+          const r = Math.max(0.6 * dpr, (L.dots[i + 2] / 2) * s);
+          g.moveTo(X(L.dots[i]) + r, Y(L.dots[i + 1]));
+          g.arc(X(L.dots[i]), Y(L.dots[i + 1]), r, 0, Math.PI * 2);
+        }
+        g.fill();
+      }
       if (isCur && o.showTravel) {
         g.globalAlpha = 0.8; g.strokeStyle = ink; g.lineWidth = Math.max(0.6, 0.6 * dpr);
         g.setLineDash([3 * dpr, 3 * dpr]);

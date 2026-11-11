@@ -56,6 +56,26 @@ for (let k = 1; k <= 2; k++) {
 console.log("pipeline ms", Date.now() - t0);
 
 const mat = DH.MATERIALS[0];
+
+// Pointillism: every layout gives dots inside the outline; tones change size or density.
+{
+  const field = DH.raster.levelField(lv, grid.w, grid.h, 1, grid.p);
+  field.tone = base.gray;
+  for (const dotLayout of ["grid", "hex", "scatter"]) {
+    const flat = DH.stitches.pathsForLayer(field, { pattern: "dots", dotLayout, dotSize: 1, dotSpacing: 1.5, dotTone: false, angle: 0 }, print, 0);
+    const toned = DH.stitches.pathsForLayer(field, { pattern: "dots", dotLayout, dotSize: 1, dotSpacing: 1.5, dotTone: true, angle: 0 }, print, 0);
+    const inside = flat.every((q) => q.type === "Dot" && q.pts.length === 1);
+    const varied = dotLayout === "scatter" ? toned.length !== flat.length : new Set(toned.map((q) => q.d.toFixed(2))).size > 1;
+    ok(flat.length > 50 && inside && varied, `dots ${dotLayout}: ${flat.length} dots, with tones ${toned.length}`);
+  }
+  const dotsPaths = DH.stitches.pathsForLayer(field, { pattern: "dots", dotLayout: "hex", dotSize: 1, dotSpacing: 1.5, dotTone: true, angle: 0 }, print, 0)
+    .map((q) => ({ ...q, pts: q.pts.map(([x, y]) => [x + 100, y + 100]) }));
+  const r = DH.gcode.build({ name: "dots", printer: DH.PRINTERS[0], material: mat, print, layers: [{ colour: 0, paths: dotsPaths }, { colour: 0, paths: dotsPaths }], colours: [{ name: "a" }] });
+  const body = r.text.split("; MACHINE_START_GCODE_END")[1].split("; MACHINE_END_GCODE_START")[0];
+  const xyExtrude = body.split("\n").filter((l) => /^G1 X[^E]* E[\d.]/.test(l)).length;
+  const blobs = body.split("\n").filter((l) => /^G1 E[\d.]+ F/.test(l)).length;
+  ok(r.stats.dots === dotsPaths.length * 2 && xyExtrude === 0 && blobs >= r.stats.dots, `dots g-code: ${r.stats.dots} dots, ${blobs} in-place extrusions, ${xyExtrude} moving extrusions, ${r.stats.filamentG.toFixed(2)} g`);
+}
 for (const pr of DH.PRINTERS) {
   try {
     const r = DH.gcode.build({ name: "test", printer: pr, material: mat, print, layers, colours: [{ name: "moss" }, { name: "ochre" }] });
