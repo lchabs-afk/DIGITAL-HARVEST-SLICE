@@ -35,6 +35,8 @@
     const fits = (x, y, d) => { const v = at(sdf, x, y); return v !== null && v >= d / 4; };
     const out = [];
     const Wmm = W * p, Hmm = H * p;
+    // How each dot is printed (read by the G-code writer).
+    const dot = { h: st.dotHeight, flow: st.dotFlow, dwell: st.dotDwell, retract: st.dotRetract, lift: st.dotLift };
 
     if (st.dotLayout === "scatter") {
       const rand = rng(1234567);
@@ -64,7 +66,7 @@
       // Serpentine order in bands one spacing tall: short travels, no sorting later.
       const band = (q) => Math.floor(q[1] / s0);
       pts.sort((a, b) => band(a) - band(b) || (band(a) % 2 ? b[0] - a[0] : a[0] - b[0]));
-      for (const q of pts) out.push({ pts: [q], closed: false, type: "Dot", d: d0, keepOrder: true });
+      for (const q of pts) out.push({ pts: [q], closed: false, type: "Dot", d: d0, dot, keepOrder: true });
       return out;
     }
 
@@ -81,7 +83,7 @@
         const x = cx + u * ca - v * sa, y = cy + u * sa + v * ca;
         const d = st.dotTone ? d0 * (0.35 + 0.65 * dark(x, y)) : d0;
         if (st.dotTone && d < d0 * 0.4) continue; // lightest areas stay bare
-        if (fits(x, y, d)) line.push({ pts: [[x, y]], closed: false, type: "Dot", d, keepOrder: true });
+        if (fits(x, y, d)) line.push({ pts: [[x, y]], closed: false, type: "Dot", d, dot, keepOrder: true });
       }
       if (row % 2) line.reverse();
       out.push(...line);

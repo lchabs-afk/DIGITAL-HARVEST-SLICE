@@ -73,8 +73,18 @@ const mat = DH.MATERIALS[0];
   const r = DH.gcode.build({ name: "dots", printer: DH.PRINTERS[0], material: mat, print, layers: [{ colour: 0, paths: dotsPaths }, { colour: 0, paths: dotsPaths }], colours: [{ name: "a" }] });
   const body = r.text.split("; MACHINE_START_GCODE_END")[1].split("; MACHINE_END_GCODE_START")[0];
   const xyExtrude = body.split("\n").filter((l) => /^G1 X[^E]* E[\d.]/.test(l)).length;
-  const blobs = body.split("\n").filter((l) => /^G1 E[\d.]+ F/.test(l)).length;
-  ok(r.stats.dots === dotsPaths.length * 2 && xyExtrude === 0 && blobs >= r.stats.dots, `dots g-code: ${r.stats.dots} dots, ${blobs} in-place extrusions, ${xyExtrude} moving extrusions, ${r.stats.filamentG.toFixed(2)} g`);
+  // Each dot: rising push (Z + E, no XY), dwell, retraction, then a lift.
+  const L = body.split("\n");
+  let blobs = 0, sequenced = 0;
+  for (let i = 0; i < L.length; i++) {
+    if (/^G1 Z[\d.]+ E[\d.]+ F/.test(L[i])) {
+      blobs++;
+      if (/^G4 P/.test(L[i + 1]) && /^G1 E-/.test(L[i + 2]) && /^G1 Z/.test(L[i + 3])) sequenced++;
+    }
+  }
+  const e1 = /^G1 Z[\d.]+ E([\d.]+)/m.exec(body);
+  ok(r.stats.dots === dotsPaths.length * 2 && xyExtrude === 0 && blobs === r.stats.dots && sequenced === blobs,
+    `dots g-code: ${r.stats.dots} dots, ${sequenced} with push → dwell → retract → lift, ${xyExtrude} moving extrusions, first blob E ${e1 && e1[1]}, ${r.stats.filamentG.toFixed(2)} g`);
 }
 for (const pr of DH.PRINTERS) {
   try {

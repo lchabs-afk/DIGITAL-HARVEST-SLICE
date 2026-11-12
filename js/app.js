@@ -5,7 +5,8 @@
 
   // ---------------------------------------------------------------- state
   const STITCH_DEFAULT = { pattern: "outline_fill", fill: "tatami", angle: 45, spacing: 0.45, rotate: 90, outlinePasses: 1, dashed: false, dashLen: 2, gapLen: 1,
-    dotLayout: "hex", dotSize: 1.2, dotSpacing: 1.8, dotTone: true };
+    dotLayout: "hex", dotSize: 1.2, dotSpacing: 1.8, dotTone: true,
+    dotHeight: 0.6, dotFlow: 1.2, dotDwell: 0.3, dotRetract: 1.2, dotLift: 2 };
   const DEFAULTS = {
     import: { widthMm: 80, offX: 0, offY: 0, mirror: false },
     trace: { mode: "colour", threshold: 128, colours: 3, paths: 60, corners: 50, noiseMm: 0.5, ignoreWhite: true, darkHigh: true, alphaMask: true },
@@ -380,6 +381,18 @@
         { path: base + "dotTone", label: "Follow the picture's tones", type: "check", help: st.dotLayout === "scatter" ? "Dots bunch up in dark areas and thin out in light ones (stippling)." : "Dots grow in dark areas and shrink in light ones (halftone)." },
       );
       if (st.dotLayout !== "scatter") specs.push({ path: base + "angle", label: "Grid angle", type: "range", min: -90, max: 90, step: 1, unit: "°" });
+      specs.push(
+        { path: base + "dotHeight", label: "Dot height", type: "range", min: 0.1, max: 2, step: 0.05, unit: "mm", on: "paths",
+          help: "How thick each blob is. The nozzle pushes plastic out while rising to this height, and dots on later layers sit on top." },
+        { path: base + "dotFlow", label: "Dot flow", type: "range", min: 0.5, max: 3, step: 0.05, unit: "×", on: "paths",
+          help: "Extra plastic per dot. Raise it if dots come out smaller than the dot size; fabric soaks some up." },
+        { path: base + "dotDwell", label: "Pause after each dot", type: "range", min: 0, max: 2, step: 0.05, unit: "s", on: "paths",
+          help: "Lets the pressure settle before leaving, so less plastic follows the nozzle." },
+        { path: base + "dotRetract", label: "Retraction after each dot", type: "range", min: 0, max: 4, step: 0.05, unit: "mm", on: "paths",
+          help: "Pulls the filament back before lifting. Raise it if strings remain; keep it low for TPU." },
+        { path: base + "dotLift", label: "Lift between dots", type: "range", min: 0.4, max: 10, step: 0.1, unit: "mm", on: "paths",
+          help: "A quick, high lift snaps the thread between dots." },
+      );
       fill("f-stitch", specs);
       return;
     }
@@ -511,7 +524,7 @@
         if (!pathCache[key]) {
           const raw = fields[k] ? DH.stitches.pathsForLayer(fields[k], st, s, ang) : [];
           pathCache[key] = raw.map((p) => ({
-            closed: p.closed, type: p.type, d: p.d, keepOrder: p.keepOrder,
+            closed: p.closed, type: p.type, d: p.d, dot: p.dot, keepOrder: p.keepOrder,
             pts: p.pts.map(([x, y]) => [pl.x0 + (state.import.mirror ? pl.W - x : x), pl.y0 + y]),
           }));
           await tick();

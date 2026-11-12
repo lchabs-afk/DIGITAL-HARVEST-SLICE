@@ -12,7 +12,7 @@
   // open paths may be reversed.
   function orderPaths(paths, start) {
     // Dots arrive already in serpentine order (there can be tens of thousands).
-    if (paths.length && paths.every((p) => p.keepOrder)) return paths.map((p) => ({ pts: p.pts, type: p.type, d: p.d }));
+    if (paths.length && paths.every((p) => p.keepOrder)) return paths.map((p) => ({ pts: p.pts, type: p.type, d: p.d, dot: p.dot }));
     const left = paths.slice();
     const out = [];
     let cx = start[0], cy = start[1];
@@ -36,7 +36,7 @@
       let pts;
       if (p.closed) pts = p.pts.slice(bestIdx).concat(p.pts.slice(0, bestIdx + 1));
       else pts = bestRev ? p.pts.slice().reverse() : p.pts;
-      out.push({ pts, type: p.type, d: p.d });
+      out.push({ pts, type: p.type, d: p.d, dot: p.dot });
       const last = pts[pts.length - 1];
       cx = last[0]; cy = last[1];
     }
@@ -119,6 +119,17 @@
     }
     const zOf = (j) => s.firstLayerZ + s.zOffset + j * s.layerHeight;
     const maxZ = total ? zOf(total - 1) : 0;
+    // Dot settings travel with each dot path (p.dot); these are the fallbacks.
+    const dotOpts = (p) => {
+      const o = { h: 0.6, flow: 1.2, dwell: 0.3, retract: Math.max(1, m.retractLength), lift: 2 };
+      for (const k in p.dot || {}) if (Number.isFinite(p.dot[k])) o[k] = p.dot[k]; // ignore unset values
+      return o;
+    };
+    const zSpeed = Math.min(printer.maxSpeedZ, 15);
+    const dotVolume = (p, flowMul) => { const o = dotOpts(p); return Math.PI * ((p.d || s.lineWidth) / 2) ** 2 * o.h * o.flow * flowMul; };
+    // Push the blob out no faster than 3 mm³/s (or the material's limit) and over at least 0.2 s.
+    const dotPushTime = (vol) => Math.max(0.2, vol / Math.min(3, m.maxVolSpeed));
+    const dotTime = (p) => { const o = dotOpts(p); return dotPushTime(dotVolume(p, 1)) + o.dwell + (2 * o.lift + o.h) / zSpeed + 0.15; };
     const firstBox = bbox(layers.slice(0, 1));
     const vars = templateVars({ printer, material: m, print: s, firstBox, maxZ, totalLayers: total });
 
@@ -135,7 +146,7 @@
       let t = 0, cx = null, cy = null;
       for (const p of ordered) {
         if (cx !== null) t += Math.hypot(p.pts[0][0] - cx, p.pts[0][1] - cy) / s.travelSpeed + 0.15;
-        t += p.type === "Dot" ? 0.3 : DH.geom.polylineLength(p.pts, false) / sp; // dot: lift, lower, extrude, retract
+        t += p.type === "Dot" ? dotTime(p) : DH.geom.polylineLength(p.pts, false) / sp;
         const l = p.pts[p.pts.length - 1]; cx = l[0]; cy = l[1];
       }
       t = t * 1.15 + 2; // acceleration and layer-change allowance
@@ -147,17 +158,19 @@
     const stats = { time: est, layers: total, perColour: {}, extrudeLen: 0, travelLen: 0, pauses: [], dots: 0 };
     if (frame && frame.pauseToPlace) stats.pauses.push({ layer: 1, why: "lay the fabric and magnets after the start routine" });
     const preview = [];
-    let cx = null, cy = null, cz = 0, retracted = false, elapsed = 0;
+    let cx = null, cy = null, cz = 0, retractedLen = 0, elapsed = 0, topZ = maxZ;
 
-    const retract = () => {
-      if (retracted || m.retractLength <= 0) return;
-      emit("G1 E-" + f5(m.retractLength) + " F" + Math.round(m.retractSpeed * 60));
-      retracted = true;
+    // Retraction remembers its length, so dots can pull back further than lines
+    // and the next prime pushes back exactly what was pulled.
+    const retract = (len = m.retractLength, speed = m.retractSpeed) => {
+      if (retractedLen > 0 || len <= 0) return;
+      emit("G1 E-" + f5(len) + " F" + Math.round(speed * 60));
+      retractedLen = len;
     };
     const unretract = () => {
-      if (!retracted) return;
-      emit("G1 E" + f5(m.retractLength) + " F" + Math.round(m.retractSpeed * 60));
-      retracted = false;
+      if (retractedLen <= 0) return;
+      emit("G1 E" + f5(retractedLen) + " F" + Math.round(m.retractSpeed * 60));
+      retractedLen = 0;
     };
 
     let prevColour = null;
@@ -207,8 +220,6 @@
       const sp = speedOf(first);
       const flow = m.flow * (first ? s.firstLayerFlow : 1);
       const ePerMm = (s.lineWidth * s.layerHeight * flow) / fArea;
-      // Dots are pushed out slowly so the blob spreads instead of shooting out.
-      const dotFeed = Math.max(30, Math.round((Math.min(m.maxVolSpeed, 3) / fArea) * 60));
       const key = colour;
       stats.perColour[key] = stats.perColour[key] || { colour, filamentMm: 0 };
       let curType = null;
@@ -216,17 +227,27 @@
       const zMove = " F" + Math.round(Math.min(printer.maxSpeedZ, 15) * 60);
       for (const p of plan[j]) {
         if (p.type === "Dot") {
-          // Lift, travel, come down, push out a blob without moving, and leave.
-          const [x, y] = p.pts[0];
+          // 1. travel high, 2. come down just above the surface, 3. push the blob
+          // out while rising to the dot height (a dome), 4. wait for the pressure
+          // to settle, 5. retract hard, 6. lift fast so any thread snaps.
+          const [x, y] = p.pts[0], o = dotOpts(p);
           if (p.type !== curType) { emit(";TYPE:Dot"); emit("; FEATURE: " + FEATURE.Dot); curType = p.type; }
+          // Dots stack: on layer j the surface is the top of j earlier dots.
+          const surf = s.firstLayerZ + s.zOffset + j * o.h;
+          const high = surf + o.lift;
           retract();
-          emit("G1 Z" + f3(z + Math.max(s.zHop, 0.4)) + zMove);
+          if (cz < high) { emit("G1 Z" + f3(high) + " F" + Math.round(zSpeed * 60)); cz = high; }
           emit("G1 X" + f3(x) + " Y" + f3(y) + " F" + Math.round(s.travelSpeed * 60));
-          emit("G1 Z" + f3(z) + zMove);
+          emit("G1 Z" + f3(surf + 0.05) + " F" + Math.round(zSpeed * 60));
           unretract();
-          const vol = Math.PI * ((p.d || s.lineWidth) / 2) ** 2 * s.layerHeight * flow;
-          const e = vol / fArea;
-          emit("G1 E" + f5(e) + " F" + dotFeed);
+          const vol = dotVolume(p, flow), e = vol / fArea;
+          const rise = Math.max(0.05, o.h * 0.8 - 0.05), tPush = dotPushTime(vol);
+          emit("G1 Z" + f3(surf + 0.05 + rise) + " E" + f5(e) + " F" + Math.max(6, Math.round((rise / tPush) * 60)));
+          if (o.dwell > 0) emit("G4 P" + Math.round(o.dwell * 1000));
+          retract(o.retract, Math.max(m.retractSpeed, 35));
+          emit("G1 Z" + f3(high) + " F" + Math.round(zSpeed * 60));
+          cz = high;
+          topZ = Math.max(topZ, surf + o.h);
           if (cx !== null) { moves.push(cx, cy, x, y, 0); stats.travelLen += Math.hypot(x - cx, y - cy); }
           dotList.push(x, y, p.d);
           stats.dots++;
@@ -291,7 +312,7 @@
     let levelingRemoved = 0;
     if (s.skipLeveling) { const r = stripLeveling(start); start = r.text; levelingRemoved = r.removed; }
     // With magnets on the plate, the end routine's moves start from above them.
-    const endZ = frame ? Math.max(maxZ, frame.safeZ) : maxZ;
+    const endZ = Math.max(topZ, frame ? frame.safeZ : 0);
     const end = DH.template.render(printer.endGcode, Object.assign({}, vars, { layer_z: endZ, max_layer_z: endZ }));
     stats.levelingRemoved = levelingRemoved;
 
@@ -305,7 +326,7 @@
       "; total filament weight [g] : " + stats.filamentG.toFixed(2),
       "; filament_density: " + m.density,
       "; filament_diameter: " + m.diameter,
-      "; max_z_height: " + maxZ.toFixed(2),
+      "; max_z_height: " + topZ.toFixed(2),
       "; HEADER_BLOCK_END",
       "",
       "; CONFIG_BLOCK_START",
