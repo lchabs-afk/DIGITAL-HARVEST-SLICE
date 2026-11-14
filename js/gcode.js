@@ -133,11 +133,13 @@
     const zOf = (j) => surface[j]; // nozzle height for lines; dots rise from here
     const layerTop = (j) => (isDotLayer[j] ? surface[j] + thick[j] : surface[j]);
     const maxZ = total ? layerTop(total - 1) : 0;
-    const zSpeed = Math.min(printer.maxSpeedZ, 15);
+    // Dots use the printer's full Z speed (lifts are short and a fast lift snaps the thread).
+    const zSpeed = Math.max(10, printer.maxSpeedZ || 15);
     const dotVolume = (p, flowMul) => { const o = dotOpts(p); return Math.PI * ((p.d || s.lineWidth) / 2) ** 2 * o.h * o.flow * flowMul; };
     // Push the blob out no faster than 3 mm³/s (or the material's limit) and over at least 0.2 s.
     const dotPushTime = (vol) => Math.max(0.2, vol / Math.min(3, m.maxVolSpeed));
-    const dotTime = (p) => { const o = dotOpts(p); return dotPushTime(dotVolume(p, 1)) + o.dwell + (2 * o.lift + o.h) / zSpeed + 0.15; };
+    // lift from the dot top, descend during the travel, short final drop, rise while pushing
+    const dotTime = (p) => { const o = dotOpts(p); return dotPushTime(dotVolume(p, 1)) + o.dwell + (o.lift + 0.2 + o.h) / zSpeed + 0.1; };
     const firstBox = bbox(layers.slice(0, 1));
     const vars = templateVars({ printer, material: m, print: s, firstBox, maxZ, totalLayers: total });
 
@@ -249,7 +251,10 @@
           const high = surf + o.lift;
           retract();
           if (cz < high) { emit("G1 Z" + f3(high) + " F" + Math.round(zSpeed * 60)); cz = high; }
-          emit("G1 X" + f3(x) + " Y" + f3(y) + " F" + Math.round(s.travelSpeed * 60));
+          // Come down during the travel, but only to just above the tops of this
+          // layer's dots (they reach at most surf + dot height), then drop the rest.
+          const approach = surf + o.h + 0.15;
+          emit("G1 X" + f3(x) + " Y" + f3(y) + " Z" + f3(Math.min(cz, approach)) + " F" + Math.round(s.travelSpeed * 60));
           emit("G1 Z" + f3(surf + 0.05) + " F" + Math.round(zSpeed * 60));
           unretract();
           const vol = dotVolume(p, flow), e = vol / fArea;
