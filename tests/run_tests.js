@@ -118,6 +118,25 @@ for (const pr of DH.PRINTERS) {
   ok(/FRAME: lift clear of the magnets before the end routine/.test(body), "frame: lifts before the end routine");
 }
 
+// Dots stack: each layer starts one dot height higher, and no Z move on a layer
+// goes below the top of the dots printed on the layer before.
+{
+  const dp = [[100, 100], [102, 100]].map((q) => ({ pts: [q], type: "Dot", d: 1.2, dot: { h: 0.6, flow: 1.2, dwell: 0.3, retract: 1.2, lift: 2 }, keepOrder: true }));
+  const pr = { ...print, firstLayerZ: 0, zOffset: 0 };
+  const r = DH.gcode.build({ name: "stack", printer: DH.PRINTERS[1], material: mat, print: pr, layers: [0, 1, 2].map(() => ({ colour: 0, paths: dp })), colours: [{ name: "a" }] });
+  const body = r.text.split("; MACHINE_START_GCODE_END")[1].split("; MACHINE_END_GCODE_START")[0];
+  const chunks = body.split(";LAYER:").slice(1);
+  let prevTop = -1, okStack = true; const starts = [];
+  chunks.forEach((c) => {
+    const zs = [...c.matchAll(/^G1 Z([\d.]+)/gm)].map((m) => +m[1]);
+    if (Math.min(...zs) < prevTop - 1e-6) okStack = false;
+    starts.push(+/G1 Z([\d.]+) F\d+\nG1 E[\d.]+ F\d+\nG1 Z[\d.]+ E/.exec(c)[1]);
+    prevTop = Math.max(...[...c.matchAll(/^G1 Z([\d.]+) E/gm)].map((m) => +m[1]));
+  });
+  const steps = starts.slice(1).map((v, i) => +(v - starts[i]).toFixed(3));
+  ok(okStack && steps.every((d) => d === 0.6), `dots stack: layer starts ${starts.join(" → ")} mm, never below the dots underneath`);
+}
+
 const sq = DH.gcode.build({ name: "square", printer: DH.PRINTERS[0], material: mat, print, layers: DH.gcode.testSquare(DH.PRINTERS[0], print), colours: [{ name: "a" }] });
 ok(sq.stats.layers === 2, "test square: 2 layers");
 process.exit(fails ? 1 : 0);

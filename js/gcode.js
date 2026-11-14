@@ -117,14 +117,22 @@
       framePrelude = "; FRAME: lift above the " + f3(frame.height) + " mm magnets\nG1 Z" + f3(frame.safeZ) + " F600\n";
       if (frame.pauseToPlace) framePrelude += "M400\n; PAUSE_PRINT: lay the fabric and magnets on the plate, then resume\n" + (printer.pauseGcode || "M400 U1") + "\n";
     }
-    const zOf = (j) => s.firstLayerZ + s.zOffset + j * s.layerHeight;
-    const maxZ = total ? zOf(total - 1) : 0;
     // Dot settings travel with each dot path (p.dot); these are the fallbacks.
     const dotOpts = (p) => {
       const o = { h: 0.6, flow: 1.2, dwell: 0.3, retract: Math.max(1, m.retractLength), lift: 2 };
       for (const k in p.dot || {}) if (Number.isFinite(p.dot[k])) o[k] = p.dot[k]; // ignore unset values
       return o;
     };
+    // Each layer sits on what was printed below it: a line layer adds one layer
+    // height, a dot layer adds one dot height. surface[j] is where layer j starts.
+    const dotH = (L) => { const p = L.paths.find((q) => q.type === "Dot"); return p ? dotOpts(p).h : 0; };
+    const isDotLayer = layers.map((L) => dotH(L) > 0);
+    const thick = layers.map((L) => dotH(L) || s.layerHeight);
+    const surface = [];
+    for (let j = 0, acc = s.firstLayerZ + s.zOffset; j < total; acc += thick[j], j++) surface.push(acc);
+    const zOf = (j) => surface[j]; // nozzle height for lines; dots rise from here
+    const layerTop = (j) => (isDotLayer[j] ? surface[j] + thick[j] : surface[j]);
+    const maxZ = total ? layerTop(total - 1) : 0;
     const zSpeed = Math.min(printer.maxSpeedZ, 15);
     const dotVolume = (p, flowMul) => { const o = dotOpts(p); return Math.PI * ((p.d || s.lineWidth) / 2) ** 2 * o.h * o.flow * flowMul; };
     // Push the blob out no faster than 3 mm³/s (or the material's limit) and over at least 0.2 s.
@@ -158,7 +166,7 @@
     const stats = { time: est, layers: total, perColour: {}, extrudeLen: 0, travelLen: 0, pauses: [], dots: 0 };
     if (frame && frame.pauseToPlace) stats.pauses.push({ layer: 1, why: "lay the fabric and magnets after the start routine" });
     const preview = [];
-    let cx = null, cy = null, cz = 0, retractedLen = 0, elapsed = 0, topZ = maxZ;
+    let cx = null, cy = null, cz = frame ? frame.safeZ : 0, retractedLen = 0, elapsed = 0, topZ = maxZ;
 
     // Retraction remembers its length, so dots can pull back further than lines
     // and the next prime pushes back exactly what was pulled.
@@ -195,10 +203,10 @@
       prevColour = colour;
 
       emit("; CHANGE_LAYER");
-      emit("; Z_HEIGHT: " + f3(z));
-      emit("; LAYER_HEIGHT: " + f3(s.layerHeight));
+      emit("; Z_HEIGHT: " + f3(layerTop(j)));
+      emit("; LAYER_HEIGHT: " + f3(thick[j]));
       emit(";LAYER:" + j);
-      const lc = DH.template.render(printer.layerChangeGcode || "", Object.assign({}, vars, { layer_num: j, layer_z: z }));
+      const lc = DH.template.render(printer.layerChangeGcode || "", Object.assign({}, vars, { layer_num: j, layer_z: layerTop(j) }));
       if (lc.trim()) emit(lc.trim());
       const remaining = Math.max(0, est - elapsed);
       emit("M73 P" + Math.min(99, Math.floor((elapsed / Math.max(1, est)) * 100)) + " R" + Math.round(remaining / 60));
@@ -214,8 +222,12 @@
         emit("G1 X" + f3(fx) + " Y" + f3(fy) + " F" + Math.round(s.travelSpeed * 60));
         cx = fx; cy = fy;
       }
-      emit("G1 Z" + f3(z) + " F" + Math.round(Math.min(printer.maxSpeedZ, 15) * 60));
-      cz = z;
+      // Dot layers set their own height dot by dot, starting from above, so
+      // never drop the nozzle here onto the dots printed on the layer below.
+      if (!isDotLayer[j]) {
+        emit("G1 Z" + f3(z) + " F" + Math.round(Math.min(printer.maxSpeedZ, 15) * 60));
+        cz = z;
+      }
 
       const sp = speedOf(first);
       const flow = m.flow * (first ? s.firstLayerFlow : 1);
@@ -233,7 +245,7 @@
           const [x, y] = p.pts[0], o = dotOpts(p);
           if (p.type !== curType) { emit(";TYPE:Dot"); emit("; FEATURE: " + FEATURE.Dot); curType = p.type; }
           // Dots stack: on layer j the surface is the top of j earlier dots.
-          const surf = s.firstLayerZ + s.zOffset + j * o.h;
+          const surf = surface[j];
           const high = surf + o.lift;
           retract();
           if (cz < high) { emit("G1 Z" + f3(high) + " F" + Math.round(zSpeed * 60)); cz = high; }
@@ -290,7 +302,7 @@
         cx = px; cy = py;
       }
       elapsed += layerTime[j];
-      preview.push({ z, colour, moves: new Float32Array(moves), dots: new Float32Array(dotList) });
+      preview.push({ z: layerTop(j), colour, moves: new Float32Array(moves), dots: new Float32Array(dotList) });
     }
     retract();
     if (frame) emit("G1 Z" + f3(frame.safeZ) + " F600 ; FRAME: lift clear of the magnets before the end routine");
