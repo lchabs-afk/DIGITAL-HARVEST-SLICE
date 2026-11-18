@@ -53,7 +53,7 @@
     const { g, w, h, dpr } = setup(canvas);
     const pad = 18 * dpr;
     let vx0, vy0, vx1, vy1;
-    if (o.wholeBed || !o.layers.length) { vx0 = 0; vy0 = 0; vx1 = o.bed[0]; vy1 = o.bed[1]; }
+    if (o.wholeBed || (!o.layers.length && !o.fit)) { vx0 = 0; vy0 = 0; vx1 = o.bed[0]; vy1 = o.bed[1]; }
     else { const b = o.fit || o.box, m = 4; [vx0, vy0, vx1, vy1] = [b[0] - m, b[1] - m, b[2] + m, b[3] + m]; }
     const s = Math.min((w - 2 * pad) / (vx1 - vx0), (h - 2 * pad) / (vy1 - vy0));
     const ox = (w - (vx1 - vx0) * s) / 2 - vx0 * s, oy = (h + (vy1 - vy0) * s) / 2 + vy0 * s;
@@ -101,6 +101,7 @@
     }
 
     const lw = Math.max(0.7 * dpr, o.lineWidth * s * 0.9);
+    const CORAL = DH.gcode ? DH.gcode.TYPES.indexOf("Coral") : -1;
     g.lineCap = "round"; g.lineJoin = "round";
     const n = o.layers.length;
     for (let j = 0; j < Math.min(o.current, n); j++) {
@@ -108,15 +109,22 @@
       const col = o.byLayer ? layerHue(j, n) : (o.colours[L.colour] ? o.colours[L.colour].hex : ink);
       g.globalAlpha = isCur ? 1 : 0.35;
       g.strokeStyle = col; g.lineWidth = lw;
-      g.beginPath();
-      let lx = NaN, ly = NaN;
-      for (let i = 0; i < mv.length; i += 5) {
-        if (mv[i + 4] === 0) continue;
-        if (mv[i] !== lx || mv[i + 1] !== ly) g.moveTo(X(mv[i]), Y(mv[i + 1]));
-        g.lineTo(X(mv[i + 2]), Y(mv[i + 3]));
-        lx = mv[i + 2]; ly = mv[i + 3];
-      }
-      g.stroke();
+      // Extruded lines; coral thread is drawn thinner than normal lines.
+      const strokeType = (wanted, width) => {
+        g.lineWidth = width;
+        g.beginPath();
+        let lx = NaN, ly = NaN;
+        for (let i = 0; i < mv.length; i += 5) {
+          const t = mv[i + 4];
+          if (t === 0 || (t === CORAL) !== wanted) continue;
+          if (mv[i] !== lx || mv[i + 1] !== ly) g.moveTo(X(mv[i]), Y(mv[i + 1]));
+          g.lineTo(X(mv[i + 2]), Y(mv[i + 3]));
+          lx = mv[i + 2]; ly = mv[i + 3];
+        }
+        g.stroke();
+      };
+      strokeType(false, lw);
+      strokeType(true, Math.max(0.6 * dpr, lw * 0.4));
       if (L.dots && L.dots.length) {
         g.fillStyle = col;
         g.beginPath();
@@ -139,7 +147,33 @@
       }
     }
     g.globalAlpha = 1;
+    return { g, X, Y, s, dpr, lw };
   }
 
-  DH.preview = { fitImage, levelCanvas, toolpaths, layerHue };
+  // A frame of the coral growth animation: bed, layers already built (faint),
+  // and the growing lines with their points.
+  function growth(canvas, o) {
+    const v = toolpaths(canvas, { ...o, layers: [], current: 0, fit: o.box, lineWidth: 0.4 });
+    const { g, X, Y, dpr } = v;
+    g.lineCap = "round"; g.lineJoin = "round";
+    g.globalAlpha = 0.25;
+    for (const U of o.under || []) {
+      g.strokeStyle = U.colour; g.lineWidth = 1 * dpr;
+      g.beginPath();
+      for (const p of U.paths) p.pts.forEach(([x, y], i) => (i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))));
+      g.stroke();
+    }
+    g.globalAlpha = 1;
+    g.strokeStyle = o.colour; g.fillStyle = o.colour; g.lineWidth = 1.25 * dpr;
+    for (const L of o.lines) {
+      g.beginPath();
+      L.forEach(([x, y], i) => (i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))));
+      g.stroke();
+    }
+    g.beginPath();
+    for (const L of o.lines) for (const [x, y] of L) { g.moveTo(X(x) + 1.4 * dpr, Y(y)); g.arc(X(x), Y(y), 1.4 * dpr, 0, Math.PI * 2); }
+    g.fill();
+  }
+
+  DH.preview = { fitImage, levelCanvas, toolpaths, growth, layerHue };
 })(globalThis.DH = globalThis.DH || {});

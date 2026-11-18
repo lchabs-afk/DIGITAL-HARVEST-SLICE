@@ -11,7 +11,20 @@
     running: { label: "Running stitch", outline: true, fill: null },
     outline_fill: { label: "Outline + fill", outline: true, fill: "choice" },
     dots: { label: "Dots (pointillism)", outline: false, fill: "dots" },
+    coral: { label: "Coral", outline: false, fill: "coral" },
   };
+
+  // Coral: growth settings from a stitch, and grown lines → printable paths.
+  function coralOptions(st) {
+    return { knotSize: st.dotSize, knotSpacing: st.coralSpacing, minSep: st.coralSep, steps: st.coralSteps,
+      seed: st.coralSeed, tone: st.dotTone, knotEvery: st.coralKnotEvery };
+  }
+  function coralPaths(grown, st) {
+    const dot = { h: st.dotHeight, flow: st.dotFlow, dwell: st.dotDwell, retract: st.dotRetract, lift: st.dotLift };
+    return grown.filter((g) => g.pts.length > 1).map((g) => ({
+      pts: g.pts, knots: g.knots, closed: false, type: "Coral", d: st.dotSize, dot, coral: { threadFlow: st.coralThreadFlow },
+    }));
+  }
 
   function rng(seed) { return () => ((seed = (seed * 16807) % 2147483647) / 2147483647); }
 
@@ -208,6 +221,11 @@
     const passes = pat.outline ? Math.max(1, st.outlinePasses) : 0;
     const fillKind = pat.fill === "choice" ? st.fill : pat.fill;
     if (fillKind === "dots") return dots(field, st);
+    if (fillKind === "coral") {
+      const g = DH.coral.grower(field, coralOptions(st));
+      g.step(st.coralSteps);
+      return coralPaths(g.result(), st);
+    }
     const paths = [];
     for (let i = 0; i < passes; i++) {
       for (const loop of contoursAt(field, (i + 0.5) * w, tol, minLen)) {
@@ -236,5 +254,5 @@
     return paths.concat(fill);
   }
 
-  DH.stitches = { PATTERNS, pathsForLayer, contoursAt, dash, dots };
+  DH.stitches = { PATTERNS, pathsForLayer, contoursAt, dash, dots, coralOptions, coralPaths };
 })(globalThis.DH = globalThis.DH || {});

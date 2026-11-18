@@ -2,8 +2,8 @@
 // Relative extrusion (M83). E = width × height × length / filament area × flow.
 (function (DH) {
   "use strict";
-  const TYPES = ["Travel", "Outline", "Satin", "Tatami", "Contour", "Running", "Dot"];
-  const FEATURE = { Outline: "Outer wall", Satin: "Sparse infill", Tatami: "Internal solid infill", Contour: "Inner wall", Running: "Outer wall", Dot: "Sparse infill" };
+  const TYPES = ["Travel", "Outline", "Satin", "Tatami", "Contour", "Running", "Dot", "Coral"];
+  const FEATURE = { Outline: "Outer wall", Satin: "Sparse infill", Tatami: "Internal solid infill", Contour: "Inner wall", Running: "Outer wall", Dot: "Sparse infill", Coral: "Outer wall" };
 
   const f3 = (v) => (Math.round(v * 1000) / 1000).toFixed(3).replace(/\.?0+$/, "") || "0";
   const f5 = (v) => (Math.round(v * 100000) / 100000).toFixed(5).replace(/\.?0+$/, "") || "0";
@@ -12,7 +12,7 @@
   // open paths may be reversed.
   function orderPaths(paths, start) {
     // Dots arrive already in serpentine order (there can be tens of thousands).
-    if (paths.length && paths.every((p) => p.keepOrder)) return paths.map((p) => ({ pts: p.pts, type: p.type, d: p.d, dot: p.dot }));
+    if (paths.length && paths.every((p) => p.keepOrder)) return paths.map((p) => ({ pts: p.pts, type: p.type, d: p.d, dot: p.dot, coral: p.coral, knots: p.knots }));
     const left = paths.slice();
     const out = [];
     let cx = start[0], cy = start[1];
@@ -36,7 +36,9 @@
       let pts;
       if (p.closed) pts = p.pts.slice(bestIdx).concat(p.pts.slice(0, bestIdx + 1));
       else pts = bestRev ? p.pts.slice().reverse() : p.pts;
-      out.push({ pts, type: p.type, d: p.d, dot: p.dot });
+      // a coral line printed backwards keeps its knots on the same points
+      const knots = p.knots && !p.closed && bestRev ? p.knots.slice().reverse() : p.knots;
+      out.push({ pts, type: p.type, d: p.d, dot: p.dot, coral: p.coral, knots });
       const last = pts[pts.length - 1];
       cx = last[0]; cy = last[1];
     }
@@ -125,7 +127,7 @@
     };
     // Each layer sits on what was printed below it: a line layer adds one layer
     // height, a dot layer adds one dot height. surface[j] is where layer j starts.
-    const dotH = (L) => { const p = L.paths.find((q) => q.type === "Dot"); return p ? dotOpts(p).h : 0; };
+    const dotH = (L) => { const p = L.paths.find((q) => q.type === "Dot" || q.type === "Coral"); return p ? dotOpts(p).h : 0; };
     const isDotLayer = layers.map((L) => dotH(L) > 0);
     const thick = layers.map((L) => dotH(L) || s.layerHeight);
     const surface = [];
@@ -140,6 +142,13 @@
     const dotPushTime = (vol) => Math.max(0.2, vol / Math.min(3, m.maxVolSpeed));
     // lift from the dot top, descend during the travel, short final drop, rise while pushing
     const dotTime = (p) => { const o = dotOpts(p); return dotPushTime(dotVolume(p, 1)) + o.dwell + (o.lift + 0.2 + o.h) / zSpeed + 0.1; };
+    // Coral: one knot per marked point, a thread between points, one lift at the end.
+    const threadFlowOf = (p) => (p.coral && Number.isFinite(p.coral.threadFlow) ? p.coral.threadFlow : 0.6);
+    const threadSpeed = (p, first) => Math.min(first ? s.firstSpeed : s.speed, m.maxVolSpeed / (s.lineWidth * s.layerHeight * threadFlowOf(p)), printer.maxSpeedXY);
+    const coralTime = (p, first) => {
+      const o = dotOpts(p), nKnots = p.knots ? p.knots.reduce((a, b) => a + b, 0) : p.pts.length;
+      return nKnots * (dotPushTime(dotVolume(p, 1)) + o.dwell + o.h / zSpeed) + DH.geom.polylineLength(p.pts, false) / threadSpeed(p, first) + (o.lift + 0.2 + o.h) / zSpeed + 0.1;
+    };
     const firstBox = bbox(layers.slice(0, 1));
     const vars = templateVars({ printer, material: m, print: s, firstBox, maxZ, totalLayers: total });
 
@@ -156,7 +165,7 @@
       let t = 0, cx = null, cy = null;
       for (const p of ordered) {
         if (cx !== null) t += Math.hypot(p.pts[0][0] - cx, p.pts[0][1] - cy) / s.travelSpeed + 0.15;
-        t += p.type === "Dot" ? dotTime(p) : DH.geom.polylineLength(p.pts, false) / sp;
+        t += p.type === "Dot" ? dotTime(p) : p.type === "Coral" ? coralTime(p, j === 0) : DH.geom.polylineLength(p.pts, false) / sp;
         const l = p.pts[p.pts.length - 1]; cx = l[0]; cy = l[1];
       }
       t = t * 1.15 + 2; // acceleration and layer-change allowance
@@ -165,7 +174,7 @@
     });
 
     // Pass 2: write.
-    const stats = { time: est, layers: total, perColour: {}, extrudeLen: 0, travelLen: 0, pauses: [], dots: 0 };
+    const stats = { time: est, layers: total, perColour: {}, extrudeLen: 0, travelLen: 0, pauses: [], dots: 0, knots: 0 };
     if (frame && frame.pauseToPlace) stats.pauses.push({ layer: 1, why: "lay the fabric and magnets after the start routine" });
     const preview = [];
     let cx = null, cy = null, cz = frame ? frame.safeZ : 0, retractedLen = 0, elapsed = 0, topZ = maxZ;
@@ -240,6 +249,54 @@
 
       const zMove = " F" + Math.round(Math.min(printer.maxSpeedZ, 15) * 60);
       for (const p of plan[j]) {
+        if (p.type === "Coral") {
+          // One continuous line: arrive like a dot, then for every point draw the
+          // thread to it while extruding and, on knot points, push a knot rising
+          // from the surface. No travel and no retraction until the line ends.
+          const o = dotOpts(p), knots = p.knots || p.pts.map(() => 1);
+          if (p.type !== curType) { emit(";TYPE:Coral"); emit("; FEATURE: " + FEATURE.Coral); curType = p.type; }
+          const surf = surface[j], high = surf + o.lift, base = surf + 0.05;
+          const rise = Math.max(0.05, o.h * 0.8 - 0.05);
+          const threadE = (s.lineWidth * s.layerHeight * flow * threadFlowOf(p)) / fArea;
+          const threadF = " F" + Math.round(threadSpeed(p, first) * 60);
+          const ti = TYPES.indexOf("Coral");
+          let [px, py] = p.pts[0];
+          retract();
+          if (cz < high) { emit("G1 Z" + f3(high) + " F" + Math.round(zSpeed * 60)); cz = high; }
+          emit("G1 X" + f3(px) + " Y" + f3(py) + " Z" + f3(Math.min(cz, surf + o.h + 0.15)) + " F" + Math.round(s.travelSpeed * 60));
+          emit("G1 Z" + f3(base) + " F" + Math.round(zSpeed * 60));
+          if (cx !== null) { moves.push(cx, cy, px, py, 0); stats.travelLen += Math.hypot(px - cx, py - cy); }
+          unretract();
+          let zNow = base;
+          for (let i = 0; i < p.pts.length; i++) {
+            const [x, y] = p.pts[i];
+            if (i > 0) {
+              const len = Math.hypot(x - px, y - py), e = len * threadE;
+              // thread: from the top of the last knot (if any) down to this point's base
+              emit("G1 X" + f3(x) + " Y" + f3(y) + (zNow !== base ? " Z" + f3(base) : "") + " E" + f5(e) + threadF);
+              zNow = base;
+              moves.push(px, py, x, y, ti);
+              stats.extrudeLen += len;
+              stats.perColour[key].filamentMm += e;
+            }
+            if (knots[i]) {
+              const vol = dotVolume(p, flow), e = vol / fArea;
+              emit("G1 Z" + f3(base + rise) + " E" + f5(e) + " F" + Math.max(6, Math.round((rise / dotPushTime(vol)) * 60)));
+              if (o.dwell > 0) emit("G4 P" + Math.round(o.dwell * 1000));
+              zNow = base + rise;
+              dotList.push(x, y, p.d);
+              stats.knots++;
+              stats.perColour[key].filamentMm += e;
+            }
+            px = x; py = y;
+          }
+          retract(o.retract, Math.max(m.retractSpeed, 35));
+          emit("G1 Z" + f3(high) + " F" + Math.round(zSpeed * 60));
+          cz = high;
+          topZ = Math.max(topZ, surf + o.h);
+          cx = px; cy = py;
+          continue;
+        }
         if (p.type === "Dot") {
           // 1. travel high, 2. come down just above the surface, 3. push the blob
           // out while rising to the dot height (a dome), 4. wait for the pressure
