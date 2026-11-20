@@ -14,37 +14,16 @@
     coral: { label: "Coral", outline: false, fill: "coral" },
   };
 
-  // Coral: every outline of a shape (outer border and each hole) as one closed
-  // loop, with knots at a regular spacing along it, joined by a thread.
-  // The inside of the shape stays empty.
-  function resampleLoop(loop, spacing) {
-    const n0 = loop.length, cum = [0];
-    for (let i = 1; i <= n0; i++) {
-      const a = loop[i - 1], b = loop[i % n0];
-      cum.push(cum[i - 1] + Math.hypot(b[0] - a[0], b[1] - a[1]));
-    }
-    const L = cum[n0], n = Math.max(3, Math.round(L / spacing)), step = L / n;
-    const out = [];
-    let seg = 0;
-    for (let k = 0; k < n; k++) {
-      const d = k * step;
-      while (cum[seg + 1] < d) seg++;
-      const a = loop[seg], b = loop[(seg + 1) % n0], t = (d - cum[seg]) / Math.max(1e-9, cum[seg + 1] - cum[seg]);
-      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
-    }
-    return out;
+  // Coral: growth settings from a stitch, and grown lines → printable paths.
+  function coralOptions(st) {
+    return { knotSize: st.dotSize, knotSpacing: st.coralSpacing, minSep: st.coralSep, steps: st.coralSteps,
+      seed: st.coralSeed, tone: st.dotTone, knotEvery: st.coralKnotEvery };
   }
-  function coralLoops(field, st, print) {
+  function coralPaths(grown, st) {
     const dot = { h: st.dotHeight, flow: st.dotFlow, dwell: st.dotDwell, retract: st.dotRetract, lift: st.dotLift };
-    const spacing = Math.max(0.2, st.coralSpacing), every = Math.max(1, Math.round(st.coralKnotEvery || 1));
-    // the exact outline: the shape's edge, lightly simplified like the other patterns
-    return contoursAt(field, 0, print.simplify, Math.max(spacing * 1.5, print.lineWidth * 1.5)).map((loop) => {
-      const pts = resampleLoop(loop, spacing);
-      return {
-        pts, closed: true, type: "Coral", d: st.dotSize, dot, coral: { threadFlow: st.coralThreadFlow },
-        knots: pts.map((_, i) => (i % every === 0 ? 1 : 0)),
-      };
-    });
+    return grown.filter((g) => g.pts.length > 1).map((g) => ({
+      pts: g.pts, knots: g.knots, closed: false, type: "Coral", d: st.dotSize, dot, coral: { threadFlow: st.coralThreadFlow },
+    }));
   }
 
   function rng(seed) { return () => ((seed = (seed * 16807) % 2147483647) / 2147483647); }
@@ -242,7 +221,11 @@
     const passes = pat.outline ? Math.max(1, st.outlinePasses) : 0;
     const fillKind = pat.fill === "choice" ? st.fill : pat.fill;
     if (fillKind === "dots") return dots(field, st);
-    if (fillKind === "coral") return coralLoops(field, st, print);
+    if (fillKind === "coral") {
+      const g = DH.coral.grower(field, coralOptions(st));
+      g.step(st.coralSteps);
+      return coralPaths(g.result(), st);
+    }
     const paths = [];
     for (let i = 0; i < passes; i++) {
       for (const loop of contoursAt(field, (i + 0.5) * w, tol, minLen)) {
@@ -271,5 +254,5 @@
     return paths.concat(fill);
   }
 
-  DH.stitches = { PATTERNS, pathsForLayer, contoursAt, dash, dots, coralLoops, resampleLoop };
+  DH.stitches = { PATTERNS, pathsForLayer, contoursAt, dash, dots, coralOptions, coralPaths };
 })(globalThis.DH = globalThis.DH || {});

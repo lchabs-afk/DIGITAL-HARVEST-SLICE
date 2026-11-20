@@ -1,6 +1,6 @@
 // node tests/run_tests.js — checks templates, geometry and G-code without a browser.
 const path = require("path");
-for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/raster.js", "js/turing.js", "js/trace.js", "js/printability.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
+for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/raster.js", "js/turing.js", "js/trace.js", "js/printability.js", "js/coral.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
 const DH = globalThis.DH;
 let fails = 0;
 const ok = (cond, msg) => { if (!cond) { fails++; console.log("FAIL", msg); } else console.log("ok  ", msg); };
@@ -212,50 +212,56 @@ for (const pr of DH.PRINTERS) {
   ok(okStack && steps.every((d) => d === 0.6), `dots stack: layer starts ${starts.join(" → ")} mm, never below the dots underneath`);
 }
 
-// Coral: each outline (outer border and every hole) is one closed loop with
-// knots at a regular spacing on it; the inside stays empty. Printed as one
-// continuous loop with no travel or retraction until it closes.
+// Coral: one polyline per shape, inside it, never crossing itself, knots apart;
+// printed with no travel or retraction inside a line.
 {
-  const p = 0.05, w = 500, h = 500, ring = new Uint8Array(w * h);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const r = Math.hypot(x * p - 12.5, y * p - 12.5);
-    if (r < 9 && r > 4) ring[y * w + x] = 1;   // a 9 mm disc with a 4 mm hole
-  }
-  const field = DH.raster.levelField(ring, w, h, 1, p);
-  const st = { pattern: "coral", coralSpacing: 2, dotSize: 1.2, coralKnotEvery: 1, coralThreadFlow: 0.6, dotHeight: 0.6, dotFlow: 1.2, dotDwell: 0.3, dotRetract: 1.2, dotLift: 2 };
-  const loops = DH.stitches.pathsForLayer(field, st, print, 0);
-  const at = (x, y) => field.sdf[Math.round(h - y / p - 0.5) * w + Math.round(x / p - 0.5)];
-  const onOutline = loops.every((q) => q.pts.every(([x, y]) => Math.abs(at(x, y)) < 0.1));
-  const gaps = loops.map((q) => q.pts.map((v, i) => { const u = q.pts[(i + 1) % q.pts.length]; return Math.hypot(u[0] - v[0], u[1] - v[1]); }));
-  const even = gaps.every((g) => Math.max(...g) / Math.min(...g) < 1.1);
-  const mean = gaps.flat().reduce((a, b) => a + b, 0) / gaps.flat().length;
-  ok(loops.length === 2 && loops.every((q) => q.closed && q.type === "Coral" && q.knots.every((k) => k === 1)) && onOutline && even && Math.abs(mean - 2) < 0.2,
-    `coral outlines: ${loops.length} loops (border + hole), ${loops.map((q) => q.pts.length).join(" + ")} knots on the outline, spacing ${mean.toFixed(2)} mm`);
+  const field = DH.raster.levelField(lv, grid.w, grid.h, 1, grid.p);
+  field.tone = base.gray;
+  const st = { pattern: "coral", dotSize: 1.2, coralSpacing: 2, coralSep: 2.4, coralSteps: 200, coralSeed: 3, dotTone: true, coralKnotEvery: 1,
+    coralThreadFlow: 0.6, dotHeight: 0.6, dotFlow: 1.2, dotDwell: 0.3, dotRetract: 1.2, dotLift: 2 };
+  const t0 = Date.now();
+  const g = DH.coral.grower(field, DH.stitches.coralOptions(st));
+  g.step(st.coralSteps);
+  const grownMs = Date.now() - t0;
+  const lines = g.lines, res = g.result();
+  const at = (x, y) => field.sdf[Math.round(grid.h - y / grid.p - 0.5) * grid.w + Math.round(x / grid.p - 0.5)];
+  const inside = lines.every((L) => L.every(([x, y]) => at(x, y) >= 0.6 - grid.p));
+  let closest = Infinity;
+  for (const L of res.map((r) => r.pts)) for (let i = 0; i < L.length; i++) for (let j = i + 4; j < L.length; j++) closest = Math.min(closest, Math.hypot(L[i][0] - L[j][0], L[i][1] - L[j][1]));
+  const growth = lines.reduce((a, L) => a + L.length, 0);
+  ok(lines.length >= 1 && growth > 100 && inside && DH.coral.crossings(lines) === 0 && DH.coral.crossings(res.map((r) => r.pts)) === 0 && closest >= 1.2,
+    `coral growth: ${lines.length} lines, ${growth} points in ${grownMs} ms, inside, no crossings, knots ≥ ${closest.toFixed(2)} mm apart`);
 
-  const every3 = DH.stitches.pathsForLayer(field, { ...st, coralKnotEvery: 3 }, print, 0);
-  const k3 = every3.reduce((a, q) => a + q.knots.reduce((x, y) => x + y, 0), 0), n3 = every3.reduce((a, q) => a + q.pts.length, 0);
-  ok(Math.abs(k3 - n3 / 3) <= every3.length, `coral knots every 3 points: ${k3} knots on ${n3} points`);
-
-  // G-code: two layers of both loops
-  const placed = loops.map((q) => ({ ...q, pts: q.pts.map(([x, y]) => [x + 100, y + 100]) }));
-  const knotSet = new Set(placed.flatMap((q) => q.pts.filter((_, i) => q.knots[i]).map(([x, y]) => x.toFixed(3) + "," + y.toFixed(3))));
-  const r = DH.gcode.build({ name: "coral", printer: DH.PRINTERS[1], material: mat, print, layers: [{ colour: 0, paths: placed }, { colour: 0, paths: placed }], colours: [{ name: "a" }] });
+  const paths = DH.stitches.coralPaths(res, st).map((q) => ({ ...q, pts: q.pts.map(([x, y]) => [x + 100, y + 100]) }));
+  const r = DH.gcode.build({ name: "coral", printer: DH.PRINTERS[1], material: mat, print, layers: [{ colour: 0, paths }, { colour: 0, paths }], colours: [{ name: "a" }] });
   const body = r.text.split("; MACHINE_START_GCODE_END")[1].split("; MACHINE_END_GCODE_START")[0].split("\n");
-  let inLoop = false, travelInside = 0, loopsSeen = 0, closed = 0, first = null, last = null;
-  const knotsAt = new Set();
-  for (const l of body) {
-    const m = /^G1 X([\d.]+) Y([\d.]+)/.exec(l);
-    if (/^G1 X[\d.]+ Y[\d.]+ Z[\d.]+ F/.test(l) && !inLoop) first = [+m[1], +m[2]]; // arrival over the loop start
-    if (!inLoop && /^G1 Z[\d.]+ E[\d.]+ F/.test(l)) { inLoop = true; loopsSeen++; last = first; knotsAt.add(first[0].toFixed(3) + "," + first[1].toFixed(3)); continue; }
-    if (!inLoop) continue;
-    if (/^G1 E-/.test(l)) { inLoop = false; if (Math.hypot(last[0] - first[0], last[1] - first[1]) < 0.002) closed++; continue; }
-    if (/^G1 X[\d.]+ Y[\d.]+( Z[\d.]+)? F/.test(l) || /^G1 Z[\d.]+ F/.test(l)) travelInside++;
-    if (m) last = [+m[1], +m[2]];
-    if (/^G1 Z[\d.]+ E[\d.]+ F/.test(l)) knotsAt.add(last[0].toFixed(3) + "," + last[1].toFixed(3));
+  // walk each coral line: from its first knot push to its final retraction. A
+  // retraction mid-line would split it, so linesSeen === lines printed also
+  // proves there is no retraction inside a line.
+  let inLine = false, travelInside = 0, linesSeen = 0;
+  for (let i = 0; i < body.length; i++) {
+    const l = body[i];
+    if (!inLine && /^G1 Z[\d.]+ E[\d.]+ F/.test(l)) { inLine = true; linesSeen++; continue; }
+    if (inLine && /^G1 E-/.test(l)) { inLine = false; continue; }
+    if (inLine && /^G1 X[\d.]+ Y[\d.]+( Z[\d.]+)? F/.test(l)) travelInside++;
+    if (inLine && /^G1 Z[\d.]+ F/.test(l)) travelInside++;
   }
-  const sameKnots = [...knotsAt].every((k) => knotSet.has(k)) && knotsAt.size === knotSet.size;
-  ok(loopsSeen === 4 && closed === 4 && travelInside === 0 && sameKnots && r.stats.knots === 2 * knotSet.size,
-    `coral g-code: ${loopsSeen} loops, all closed on their start, ${travelInside} travel moves inside a loop, knots on the same ${knotSet.size} points (start rotated by the printer order)`);
+  const expectedKnots = 2 * res.reduce((a, q) => a + q.knots.reduce((x, y) => x + y, 0), 0);
+  ok(linesSeen === 2 * paths.length && travelInside === 0 && r.stats.knots === expectedKnots && r.stats.extrudeLen > 0,
+    `coral g-code: ${linesSeen} lines, ${r.stats.knots} knots, ${travelInside} travel moves inside lines, no retraction inside a line, ${Math.round(r.stats.extrudeLen)} mm of thread`);
+
+  // Higher level: the parts of the same line inside the smaller field, so every
+  // knot there sits on a knot of the level below.
+  const f2 = DH.raster.levelField(lv, grid.w, grid.h, 2, grid.p);
+  const upper = DH.coral.clip(res, f2, 0.2); // small margin: level-2 ridges of the test maze are narrow
+  const below = new Set(res.flatMap((q) => q.pts.filter((_, i) => q.knots[i]).map((v) => v.join(","))));
+  const stacked = upper.every((q) => q.pts.every((v, i) => !q.knots[i] || below.has(v.join(","))));
+  ok(upper.length > 0 && stacked, `coral level 2 reuses level 1's line: ${upper.length} pieces, every knot on a knot below`);
+
+  const every3 = DH.coral.grower(field, DH.stitches.coralOptions({ ...st, coralKnotEvery: 3 }));
+  every3.step(st.coralSteps);
+  const r3 = every3.result(), pts3 = r3.reduce((a, q) => a + q.pts.length, 0), k3 = r3.reduce((a, q) => a + q.knots.reduce((x, y) => x + y, 0), 0);
+  ok(Math.abs(k3 - pts3 / 3) <= r3.length * 2, `coral knots every 3 points: ${k3} knots on ${pts3} points`);
 }
 
 const sq = DH.gcode.build({ name: "square", printer: DH.PRINTERS[0], material: mat, print, layers: DH.gcode.testSquare(DH.PRINTERS[0], print), colours: [{ name: "a" }] });
