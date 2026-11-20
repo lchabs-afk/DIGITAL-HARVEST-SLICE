@@ -152,30 +152,5 @@
     return { g, X, Y, s, dpr, lw };
   }
 
-  // A frame of the coral growth animation: bed, layers already built (faint),
-  // and the growing lines with their points.
-  function growth(canvas, o) {
-    const v = toolpaths(canvas, { ...o, layers: [], current: 0, fit: o.box, lineWidth: 0.4 });
-    const { g, X, Y, dpr } = v;
-    g.lineCap = "round"; g.lineJoin = "round";
-    g.globalAlpha = 0.25;
-    for (const U of o.under || []) {
-      g.strokeStyle = U.colour; g.lineWidth = 1 * dpr;
-      g.beginPath();
-      for (const p of U.paths) p.pts.forEach(([x, y], i) => (i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))));
-      g.stroke();
-    }
-    g.globalAlpha = 1;
-    g.strokeStyle = o.colour; g.fillStyle = o.colour; g.lineWidth = 1.25 * dpr;
-    for (const L of o.lines) {
-      g.beginPath();
-      L.forEach(([x, y], i) => (i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))));
-      g.stroke();
-    }
-    g.beginPath();
-    for (const L of o.lines) for (const [x, y] of L) { g.moveTo(X(x) + 1.4 * dpr, Y(y)); g.arc(X(x), Y(y), 1.4 * dpr, 0, Math.PI * 2); }
-    g.fill();
-  }
-
-  DH.preview = { fitImage, levelCanvas, toolpaths, growth, layerHue };
+  DH.preview = { fitImage, levelCanvas, toolpaths, layerHue };
 })(globalThis.DH = globalThis.DH || {});

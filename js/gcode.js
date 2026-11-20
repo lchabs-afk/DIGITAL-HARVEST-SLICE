@@ -12,7 +12,7 @@
   // open paths may be reversed.
   function orderPaths(paths, start) {
     // Dots arrive already in serpentine order (there can be tens of thousands).
-    if (paths.length && paths.every((p) => p.keepOrder)) return paths.map((p) => ({ pts: p.pts, type: p.type, d: p.d, dot: p.dot, coral: p.coral, knots: p.knots }));
+    if (paths.length && paths.every((p) => p.keepOrder)) return paths.map((p) => ({ pts: p.pts, type: p.type, d: p.d, dot: p.dot }));
     const left = paths.slice();
     const out = [];
     let cx = start[0], cy = start[1];
@@ -36,8 +36,11 @@
       let pts;
       if (p.closed) pts = p.pts.slice(bestIdx).concat(p.pts.slice(0, bestIdx + 1));
       else pts = bestRev ? p.pts.slice().reverse() : p.pts;
-      // a coral line printed backwards keeps its knots on the same points
-      const knots = p.knots && !p.closed && bestRev ? p.knots.slice().reverse() : p.knots;
+      // knots follow their points: rotated with a loop that starts elsewhere (the
+      // closing point back to the start gets no second knot), reversed with a line
+      let knots = p.knots;
+      if (knots && p.closed) knots = knots.slice(bestIdx).concat(knots.slice(0, bestIdx), [0]);
+      else if (knots && bestRev) knots = knots.slice().reverse();
       out.push({ pts, type: p.type, d: p.d, dot: p.dot, coral: p.coral, knots });
       const last = pts[pts.length - 1];
       cx = last[0]; cy = last[1];
@@ -250,9 +253,10 @@
       const zMove = " F" + Math.round(Math.min(printer.maxSpeedZ, 15) * 60);
       for (const p of plan[j]) {
         if (p.type === "Coral") {
-          // One continuous line: arrive like a dot, then for every point draw the
-          // thread to it while extruding and, on knot points, push a knot rising
-          // from the surface. No travel and no retraction until the line ends.
+          // One continuous loop around a shape's outline: arrive like a dot, then
+          // for every point draw the thread to it while extruding and, on knot
+          // points, push a knot rising from the surface. The loop closes on its
+          // start point. No lift, travel or retraction until the loop is done.
           const o = dotOpts(p), knots = p.knots || p.pts.map(() => 1);
           if (p.type !== curType) { emit(";TYPE:Coral"); emit("; FEATURE: " + FEATURE.Coral); curType = p.type; }
           const surf = surface[j], high = surf + o.lift, base = surf + 0.05;

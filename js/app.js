@@ -7,7 +7,7 @@
   const STITCH_DEFAULT = { pattern: "outline_fill", fill: "tatami", angle: 45, spacing: 0.45, rotate: 90, outlinePasses: 1, dashed: false, dashLen: 2, gapLen: 1,
     dotLayout: "hex", dotSize: 1.2, dotSpacing: 1.8, dotTone: true,
     dotHeight: 0.6, dotFlow: 1.2, dotDwell: 0.3, dotRetract: 1.2, dotLift: 2,
-    coralSpacing: 2, coralThreadFlow: 0.6, coralSep: 2.4, coralSteps: 300, coralSeed: 1, coralKnotEvery: 1, coralSepAuto: true };
+    coralSpacing: 2, coralThreadFlow: 0.6, coralKnotEvery: 1 };
   const DEFAULTS = {
     import: { widthMm: 80, offX: 0, offY: 0, mirror: false },
     tone: { black: 0, white: 255, gamma: 1, contrast: 0 },
@@ -378,24 +378,18 @@
     const fillKind = pat === "outline_fill" ? st.fill : pat;
     if (pat === "coral") {
       specs.push(
-        { path: base + "coralSpacing", label: "Knot spacing", type: "range", min: 0.5, max: 10, step: 0.1, unit: "mm", help: "Distance between knots along the line." },
-        { path: base + "dotSize", label: "Knot size", type: "range", min: 0.3, max: 5, step: 0.05, unit: "mm",
-          after: (v) => { if (st.coralSepAuto !== false) { st.coralSep = Math.round(v * 2 * 100) / 100; renderStitch(); } } },
-        { path: base + "coralSep", label: "Minimum spacing between line parts", type: "range", min: 0.5, max: 12, step: 0.05, unit: "mm",
-          after: () => { st.coralSepAuto = false; },
-          help: "How close two parts of the line may come. Follows twice the knot size (so knots don't merge) until you change it." },
-        { path: base + "coralSteps", label: "Growth steps", type: "range", min: 20, max: 2000, step: 10, unit: "", help: "More steps: a longer, more folded line, up to what fits in the shape." },
-        { path: base + "coralSeed", label: "Random seed", type: "range", min: 1, max: 999, step: 1, unit: "", help: "Change it for a different growth with the same settings." },
-        { path: base + "dotTone", label: "Follow the picture's tones", type: "check", help: "Dark areas fold more densely; light areas stay looser." },
+        { path: base + "coralSpacing", label: "Knot spacing", type: "range", min: 0.5, max: 10, step: 0.1, unit: "mm",
+          help: "Distance between knots along each outline. The inside of the shapes stays empty; holes get their own outline." },
+        { path: base + "dotSize", label: "Knot size", type: "range", min: 0.3, max: 5, step: 0.05, unit: "mm" },
         { path: base + "coralKnotEvery", label: "Knots every N points", type: "range", min: 1, max: 20, step: 1, unit: "", help: "1 knots every point. Higher leaves plain thread between knots." },
-        { path: base + "coralThreadFlow", label: "Thread flow", type: "range", min: 0.1, max: 2, step: 0.05, unit: "×", on: "paths",
+        { path: base + "coralThreadFlow", label: "Thread flow", type: "range", min: 0.1, max: 2, step: 0.05, unit: "×",
           help: "Plastic in the connecting thread, as a share of a normal line. Lower makes the thread thinner than the knots." },
-        { path: base + "dotFlow", label: "Knot flow", type: "range", min: 0.5, max: 3, step: 0.05, unit: "×", on: "paths", help: "Extra plastic per knot." },
-        { path: base + "dotHeight", label: "Knot height", type: "range", min: 0.1, max: 2, step: 0.05, unit: "mm", on: "paths",
+        { path: base + "dotFlow", label: "Knot flow", type: "range", min: 0.5, max: 3, step: 0.05, unit: "×", help: "Extra plastic per knot." },
+        { path: base + "dotHeight", label: "Knot height", type: "range", min: 0.1, max: 2, step: 0.05, unit: "mm",
           help: "The nozzle rises this much while pushing a knot, so it doesn't sink into the blob." },
-        { path: base + "dotDwell", label: "Pause after each knot", type: "range", min: 0, max: 2, step: 0.05, unit: "s", on: "paths" },
-        { path: base + "dotRetract", label: "Retraction at the end of a line", type: "range", min: 0, max: 4, step: 0.05, unit: "mm", on: "paths" },
-        { path: base + "dotLift", label: "Lift at the end of a line", type: "range", min: 0.4, max: 10, step: 0.1, unit: "mm", on: "paths" },
+        { path: base + "dotDwell", label: "Pause after each knot", type: "range", min: 0, max: 2, step: 0.05, unit: "s" },
+        { path: base + "dotRetract", label: "Retraction at the end of a loop", type: "range", min: 0, max: 4, step: 0.05, unit: "mm" },
+        { path: base + "dotLift", label: "Lift at the end of a loop", type: "range", min: 0.4, max: 10, step: 0.1, unit: "mm" },
       );
       fill("f-stitch", specs);
       return;
@@ -464,7 +458,7 @@
   // ---------------------------------------------------------------- pipeline
   let src = null, srcName = "";
   let grid = null, base = null, lv = null, lvCanvas = null, presentLevels = 0;
-  let fields = {}, pathCache = {}, growCache = {}, result = null, error = null, genToken = 0, stale = true;
+  let fields = {}, pathCache = {}, result = null, error = null, genToken = 0, stale = true;
 
   const heightMm = () => (src ? (state.import.widthMm * src.height) / src.width : 0);
 
@@ -586,7 +580,7 @@
     presentLevels = 0;
     for (let k = 1; k <= N; k++) if (counts.slice(k).some((n) => n > 0)) presentLevels = k;
     lvCanvas = null;
-    fields = {}; growCache = {};
+    fields = {};
     onPaths();
     if (view === "turing") redraw();
   }
@@ -613,18 +607,7 @@
     return { x0: pr.bed[0] / 2 + state.import.offX - W / 2, y0: pr.bed[1] / 2 + state.import.offY - H / 2, W, H };
   }
 
-  // Preview frame while a coral line grows: the bed, the layers already built,
-  // and the growing line(s) in this level's colour.
-  function drawGrowth(lines, k, built) {
-    if (view !== "paths") return;
-    const pr = printer(), pl = placement();
-    const toBed = ([x, y]) => [pl.x0 + (state.import.mirror ? pl.W - x : x), pl.y0 + y];
-    DH.preview.growth($("view"), {
-      bed: pr.bed, exclude: pr.excludeArea, box: [pl.x0, pl.y0, pl.x0 + pl.W, pl.y0 + pl.H], frame: frameGeom(),
-      wholeBed: $("wholeBed").checked, lines: lines.map((L) => L.map(toBed)), colour: state.colours[k - 1].hex,
-      under: built.map((L) => ({ paths: L.paths, colour: state.colours[L.colour].hex })),
-    });
-  }
+  const stOf = (q) => (state.stitchSame ? state.stitches[0] : state.stitches[q - 1]);
 
   async function buildLayers(token) {
     const pl = placement(), s = printSettings();
@@ -637,48 +620,28 @@
         await tick();
         if (token !== genToken) return null;
       }
-      const st = state.stitchSame ? state.stitches[0] : state.stitches[k - 1];
+      const st = stOf(k);
       for (let r = 0; r < L; r++) {
         const j = (k - 1) * L + r;
         const ang = ((j * (st.rotate || 0)) % 360 + 360) % 360;
-        const key = st.pattern === "coral" ? k + "|coral" : k + "|" + ang; // a coral line is the same on every layer
-        const gkey = k + "|" + JSON.stringify(DH.stitches.coralOptions(st));
-        // When the level below is also Coral with the same growth settings, reuse
-        // its line, keeping only the parts inside this level: the knots then land
-        // exactly on the knots below and stack into columns.
-        const stOf = (q) => (state.stitchSame ? state.stitches[0] : state.stitches[q - 1]);
-        let root = k;
-        while (root > 1 && stOf(root - 1).pattern === "coral" && JSON.stringify(DH.stitches.coralOptions(stOf(root - 1))) === JSON.stringify(DH.stitches.coralOptions(st))) root--;
-        if (st.pattern === "coral" && root < k && !growCache[gkey] && fields[k]) {
-          const rootKey = root + "|" + JSON.stringify(DH.stitches.coralOptions(st));
-          if (growCache[rootKey]) growCache[gkey] = DH.coral.clip(growCache[rootKey], fields[k], st.dotSize / 2);
-        }
-        if (!pathCache[key] && st.pattern === "coral" && fields[k] && !growCache[gkey]) {
-          // Grow step by step so the preview can show the line growing.
-          const g = DH.coral.grower(fields[k], DH.stitches.coralOptions(st));
-          let last = 0;
-          while (!g.done()) {
-            g.step(4);
-            if (token !== genToken) return null;
-            const now = performance.now();
-            if (now - last > 50) {
-              last = now;
-              $("busy").textContent = `growing coral: level ${k}, step ${g.stepCount}/${g.total}`;
-              drawGrowth(g.lines, k, layers);
-            }
-            await tick();
-          }
-          $("busy").textContent = "computing toolpaths…";
-          growCache[gkey] = g.result();
-        }
-        if (!pathCache[key] && st.pattern === "coral" && growCache[gkey]) {
-          // Print settings (flows, pause, retraction…) only re-map the grown line.
-          pathCache[key] = DH.stitches.coralPaths(growCache[gkey], st).map((p) => Object.assign(p, {
-            pts: p.pts.map(([x, y]) => [pl.x0 + (state.import.mirror ? pl.W - x : x), pl.y0 + y]),
-          }));
-        }
+        const key = st.pattern === "coral" ? k + "|coral" : k + "|" + ang; // coral loops are the same on every layer
         if (!pathCache[key]) {
-          const raw = fields[k] ? DH.stitches.pathsForLayer(fields[k], st, s, ang) : [];
+          let raw = [];
+          if (st.pattern === "coral") {
+            // Coral prints outlines only, so a level's inside is empty and can't
+            // carry the level above. Each coral outline is therefore its own wall
+            // from the fabric up: a layer of level k prints the outlines of level k
+            // and of every higher coral level, and each loop stacks on itself.
+            for (let m = k; m <= presentLevels; m++) {
+              const sm = stOf(m);
+              if (m > k && sm.pattern !== "coral") continue;
+              if (!fields[m]) {
+                fields[m] = DH.raster.levelField(lv, grid.w, grid.h, m, grid.p);
+                if (fields[m]) fields[m].tone = tone;
+              }
+              if (fields[m]) raw.push(...DH.stitches.coralLoops(fields[m], m === k ? st : sm, s));
+            }
+          } else if (fields[k]) raw = DH.stitches.pathsForLayer(fields[k], st, s, ang);
           pathCache[key] = raw.map((p) => ({
             closed: p.closed, type: p.type, d: p.d, dot: p.dot, keepOrder: p.keepOrder, knots: p.knots, coral: p.coral,
             pts: p.pts.map(([x, y]) => [pl.x0 + (state.import.mirror ? pl.W - x : x), pl.y0 + y]),
@@ -829,6 +792,10 @@
     if (fp) add("bad", fp);
     if (state.frame.enabled && !state.frame.pauseToPlace)
       add("", "The printer's start routine (purge line, calibration, leveling) moves low across the plate and could hit magnets that are already on. Lay the fabric and magnets after it, or turn on the pause.");
+    for (let m = 2; m <= presentLevels; m++) {
+      if (stOf(m - 1).pattern === "coral" && stOf(m).pattern !== "coral")
+        add("", `Level ${m} is printed over the empty inside of level ${m - 1}'s coral outline, so it would hang in the air. Use Coral for level ${m} too, or a filled pattern for level ${m - 1}.`);
+    }
     if (pr.multiNozzle) add("info", `${pr.name}: dual-nozzle start G-code is filled for one filament on one nozzle. Print the test square before a real job.`);
     if (state.machine.skipLeveling && result && !result.stats.levelingRemoved) add("", "No bed-leveling block was found in this printer's start G-code; nothing was removed.");
   }
