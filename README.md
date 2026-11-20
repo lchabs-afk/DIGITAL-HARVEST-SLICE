@@ -2,7 +2,7 @@
 
 Step 3 of **Digital Harvest**: *picking* (3D-scanning nature with Polycam) → *pressing* (the 2D UV texture from Blender's UV editor) → **embroidering** (printing that texture directly onto textile).
 
-This browser app grows a Turing pattern (reaction-diffusion) across the pressed UV texture, steered by the plant's tones, and writes the G-code itself, with no slicer. Fill paths imitate embroidery stitches, and up to five height levels build a stepped relief, each in its own filament colour.
+This browser app turns the pressed UV texture into shapes, either by growing a Turing pattern (reaction-diffusion) steered by the plant's tones, or with an image trace like Illustrator's. It then writes the G-code itself, with no slicer. Fill paths imitate embroidery stitches, and up to five height levels build a stepped relief, each in its own filament colour.
 
 Everything runs in the browser. No server, no install, and your image never leaves your computer.
 
@@ -14,7 +14,9 @@ Everything runs in the browser. No server, no install, and your image never leav
 ### The five panels
 
 1. **Import:** drop a PNG/JPG, set the output width in mm (the height follows the aspect ratio), and offset it from the bed centre. Transparent pixels are never printed.
-2. **Turing pattern:** a Gray-Scott reaction-diffusion simulation turns the image into shapes. The pipeline is: image → grayscale + levels/contrast → Turing reaction-diffusion → height levels → printability filter → vectorize → stitches → G-code.
+2. **Image treatment:** choose **turing pattern** or **image trace** with the two buttons at the top. The pipeline is: image → grayscale + levels/contrast → Turing pattern *or* image trace → height levels → printability filter → vectorize → stitches → G-code. Levels/contrast, the printability filter and everything after it apply to both.
+
+   **Turing pattern:** a Gray-Scott reaction-diffusion simulation grows the shapes.
    - **Pattern:** *spots*, *stripes*, *maze* or *coral*. Feed and kill are under *advanced*.
    - **Pattern scale:** the distance between neighbouring spots or stripes, in mm, so the pattern can match the nozzle.
    - **Image influence:** how strongly the plant's tones steer the pattern. Each cell's darkness shifts its feed and kill: dark areas get a denser pattern, light areas thin out to bare fabric, so a white background stays unprinted.
@@ -22,9 +24,11 @@ Everything runs in the browser. No server, no install, and your image never leav
    - **Random seed** and **invert** (print the gaps).
    - **Height levels:** the final concentration is posterized into 1–5 heights, so the cores of spots and stripes stand tallest.
    - **Image:** levels (black point, white point, midtones) and contrast before the simulation.
-   - **Printability:** removes parts narrower than the *minimum feature width* and islands smaller than the *minimum area* (smaller holes are filled). The *turing* tab shows what was removed in red.
+   - **Printability:** removes parts narrower than the *minimum feature width* and islands smaller than the *minimum area* (smaller holes are filled). The *turing* / *trace* tab shows what was removed as red hatching.
 
    It runs on the GPU (WebGL2 with float textures), so the preview stays fast. Browsers without WebGL2 fall back to the same equations in JavaScript on a coarser grid.
+
+   **Image trace:** works like Illustrator's Image Trace. Choose *b&w* (threshold), *grayscale* or *colour* (1–5 tones, clustered in the OKLab colour space), then set paths (how closely outlines follow the pixels), corners, noise and ignore white. Each tone becomes one height level, darkest tallest by default. *Use as filament colours* copies the traced colours to the level colours.
 3. **Stitch & print:** a pattern per level: *Satin* (dense zigzag), *Fill / tatami* (parallel lines, optionally rotated each layer), *Contour* (concentric inward rings), *Running stitch* (outline, optionally dashed), *Outline + fill*, or *Dots (pointillism)*. Dots are single blobs of plastic, each pushed out in place with no movement, on a *grid*, *hex* grid or *scatter* layout. With *follow the picture's tones* on, grid dots grow in dark areas (halftone) and scattered dots bunch up there (stippling). Dots sit in the same place on every layer, so they stack into small columns. How a dot is printed: the nozzle travels high, comes down just above the surface and pushes the blob out while rising to the *dot height*, which builds a small dome. Then it pauses, retracts and lifts quickly so the thread between dots snaps. Tune it with *dot height*, *dot flow* (raise it if dots come out too small, since fabric soaks some up), *pause after each dot*, *retraction after each dot* (raise it for strings, keep it low for TPU) and *lift between dots*. On later layers each dot lands on the one below, one dot height higher. Expect long print times for big or dense designs.
 
 **Coral** works on shape borders. Every outline of a shape, the outer border and each hole, becomes one closed loop with **knots at a regular spacing along the exact outline**, joined by a continuous extruded thread. The inside of the shapes stays empty. On each knot point the nozzle pushes a knot while rising, using the dot settings (knot size, height, flow and pause). Between knots it keeps extruding as it moves, and the loop closes on its start point. There is no lift, travel or retraction along a loop, only once it's done. The settings are knot spacing, knot size, thread flow (separate from knot flow) and knots every N points (plain thread in between). With several height levels, each level's outline is its own wall from the fabric up: a layer of level k prints the outlines of level k and of every higher coral level, so every loop stacks on itself and inner outlines stand taller, like a contour map. A non-coral level above a coral one would sit over an empty inside, so the app warns about that combination.
@@ -53,6 +57,7 @@ Copy the `.gcode` file to the root of the printer's SD card and start it from th
 |---|---|
 | `js/raster.js` | working grid, grayscale/RGB copy, despeckle, and the signed distance field of each level |
 | `js/turing.js` | Gray-Scott reaction-diffusion (WebGL2, with a JavaScript fallback), image-steered feed/kill, posterize into height levels |
+| `js/trace.js` | image trace: threshold or k-means clustering (OKLab) → level map, with corner rounding and noise removal |
 | `js/printability.js` | printability filter: minimum feature width (opening), minimum island/hole area, and the removed areas for the red preview |
 | `js/geometry.js` | exact Euclidean distance transform, marching-squares iso-contours, Douglas–Peucker simplification, scanline clipping |
 | `js/stitches.js` | distance field → stitch toolpaths (outlines are iso-contours at ½, 1½ … line widths inside the edge) |
@@ -81,7 +86,7 @@ python3 tools/import_bambu.py BambuStudio
 node tests/run_tests.js
 ```
 
-The tests check the template interpreter, the Turing presets (spots, stripes, maze, coral), image influence, seeds, posterizing and invert, the printability filter, every stitch pattern, and a full G-code build for every printer, with no unresolved placeholders and no NaN moves.
+The tests check the template interpreter, the Turing presets (spots, stripes, maze, coral), image influence, seeds, posterizing and invert, the image trace modes, the printability filter, every stitch pattern, and a full G-code build for every printer, with no unresolved placeholders and no NaN moves.
 
 ## Status and roadmap
 

@@ -1,6 +1,6 @@
 // node tests/run_tests.js — checks templates, geometry and G-code without a browser.
 const path = require("path");
-for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/raster.js", "js/turing.js", "js/printability.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
+for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/raster.js", "js/turing.js", "js/trace.js", "js/printability.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
 const DH = globalThis.DH;
 let fails = 0;
 const ok = (cond, msg) => { if (!cond) { fails++; console.log("FAIL", msg); } else console.log("ok  ", msg); };
@@ -89,6 +89,17 @@ const filt = DH.printability.filter(raw, grid.w, grid.h, 2, grid.p, { minWidthMm
 const lv = filt.lv;
 const counts = DH.raster.levelStats(lv, 2);
 ok(counts[1] > 0 && counts[2] > 0, "two levels present after the printability filter " + JSON.stringify(counts));
+
+// Image trace (the other image treatment) on the same synthetic image, then
+// through the same printability filter.
+for (const mode of ["bw", "gray", "colour"]) {
+  const tr = DH.trace.traceMap(base, { mode, threshold: 128, colours: 3, paths: 60, corners: 50, noiseMm: 0.5, ignoreWhite: true, darkHigh: true, alphaMask: true }, grid.p);
+  const c = DH.raster.levelStats(tr.lv, tr.levels);
+  const f = DH.printability.filter(tr.lv, grid.w, grid.h, tr.levels, grid.p, { minWidthMm: 0.5, minAreaMm2: 0.5 });
+  const cf = DH.raster.levelStats(f.lv, tr.levels);
+  ok(tr.levels >= 1 && c.slice(1).some((n) => n > 0) && tr.swatches.length === tr.levels && cf.slice(1).some((n) => n > 0),
+    `image trace ${mode}: ${tr.levels} levels ${JSON.stringify(c)}, after printability ${JSON.stringify(cf)}`);
+}
 
 // Printability filter: a 0.3 mm line and a 0.2 mm² island go, a 5 mm blob stays.
 {
