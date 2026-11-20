@@ -5,7 +5,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Digital Harvest Stitch</title>
-<meta name="description" content="Turn a pressed UV texture into traced shapes and embroidery-style G-code for printing on textile with Bambu Lab printers.">
+<meta name="description" content="Turn a pressed UV texture into Turing patterns and embroidery-style G-code for printing on textile with Bambu Lab printers.">
 <link rel="preload" href="fonts/Haskoy-variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/style.css">
 </head>
@@ -37,15 +37,23 @@
       <div class="fields" id="f-import"></div>
     </section>
 
-    <section class="panel" id="p-trace">
-      <h2><span class="num">02</span> Image trace</h2>
-      <p class="hint">Like Illustrator's Image Trace: groups the picture into a few flat tones or colours with crisp edges. Each one becomes a height level.</p>
-      <div class="fields" id="f-trace"></div>
-      <div class="traced" id="tracedColours">
-        <h3>Traced colours</h3>
-        <div class="traced-swatches" id="tracedSwatches"></div>
-        <button class="btn small" id="useTraced" type="button">use as filament colours</button>
+    <section class="panel" id="p-turing">
+      <h2><span class="num">02</span> Turing pattern</h2>
+      <p class="hint">A reaction-diffusion simulation grows spots, stripes or mazes across the design, steered by the plant's tones. Inspired by Ivan Murit's TexTuring.</p>
+      <div class="fields" id="f-turing"></div>
+      <div class="sim-controls">
+        <button class="btn small" id="simPause" type="button">pause</button>
+        <button class="btn small ghost" id="simRestart" type="button">restart</button>
+        <span class="sim-status" id="simStatus" aria-live="polite"></span>
       </div>
+      <details class="advanced">
+        <summary>advanced</summary>
+        <div class="fields" id="f-turing-adv"></div>
+      </details>
+      <h3>Image</h3>
+      <div class="fields" id="f-tone"></div>
+      <h3>Printability</h3>
+      <div class="fields" id="f-printable"></div>
     </section>
 
     <section class="panel" id="p-stitch">
@@ -60,8 +68,6 @@
     <section class="panel" id="p-machine">
       <h2><span class="num">04</span> Machine &amp; material</h2>
       <div class="fields" id="f-machine"></div>
-      <h3>Magnet frame</h3>
-      <div class="fields" id="f-frame"></div>
       <h3>Material</h3>
       <div class="fields" id="f-material"></div>
       <div class="row-btns">
@@ -76,6 +82,8 @@
         <p class="hint">Check a printer profile before the real thing: a 20 mm two-layer square in the middle of the bed, on the bare plate.</p>
         <button class="btn small" id="testSquare" type="button">Export test square</button>
       </div>
+      <h3>Magnet frame</h3>
+      <div class="fields" id="f-frame"></div>
     </section>
   </div>
 
@@ -85,7 +93,7 @@
         <h2><span class="num">05</span> Preview &amp; export</h2>
         <div class="tabs" id="viewTabs" role="tablist">
           <button type="button" role="tab" data-view="original">Original</button>
-          <button type="button" role="tab" data-view="trace">trace</button>
+          <button type="button" role="tab" data-view="turing">turing</button>
           <button type="button" role="tab" data-view="paths" aria-selected="true">Toolpaths</button>
         </div>
       </div>
@@ -145,7 +153,8 @@
 <script src="js/template.js"></script>
 <script src="js/geometry.js"></script>
 <script src="js/raster.js"></script>
-<script src="js/trace.js"></script>
+<script src="js/turing.js"></script>
+<script src="js/printability.js"></script>
 <script src="js/coral.js"></script>
 <script src="js/stitches.js"></script>
 <script src="js/gcode.js"></script>

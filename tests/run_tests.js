@@ -1,6 +1,6 @@
 // node tests/run_tests.js — checks templates, geometry and G-code without a browser.
 const path = require("path");
-for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/raster.js", "js/trace.js", "js/coral.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
+for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/raster.js", "js/turing.js", "js/printability.js", "js/coral.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
 const DH = globalThis.DH;
 let fails = 0;
 const ok = (cond, msg) => { if (!cond) { fails++; console.log("FAIL", msg); } else console.log("ok  ", msg); };
@@ -27,18 +27,82 @@ function synth(w, h) {
 }
 const grid = DH.raster.gridFor(60, 40);
 const base = DH.raster.toGray(synth(grid.w, grid.h));
-const t0 = Date.now();
-const traced2 = DH.trace.traceMap(base, { mode: "gray", colours: 2, paths: 70, corners: 60, noiseMm: 0.8, ignoreWhite: true, darkHigh: true, alphaMask: true }, grid.p);
-const lv = traced2.lv;
-const counts = DH.raster.levelStats(lv, 2);
-ok(counts[1] > 0 && counts[2] > 0, "two levels present " + JSON.stringify(counts));
-ok(lv[10 * grid.w + 10] === 0, "speck removed by noise");
+// ---- Turing patterns (JavaScript backend; the app uses the GPU when it can)
+const TU = DH.turing;
+const flat = (w, h) => new Float32Array(w * h).fill(0.5);
+const measure = (V, w, h) => {
+  let top = 1e-4; for (const v of V) top = Math.max(top, v);
+  const on = (i) => V[i] / top > 0.5;
+  let cov = 0; for (let i = 0; i < w * h; i++) cov += on(i);
+  const seen = new Uint8Array(w * h); let pieces = 0;
+  for (let s0 = 0; s0 < w * h; s0++) {
+    if (seen[s0] || !on(s0)) continue; pieces++;
+    const st = [s0]; seen[s0] = 1;
+    while (st.length) { const i = st.pop(), x = i % w, y = (i / w) | 0;
+      for (const q of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]) if (q >= 0 && !seen[q] && on(q)) { seen[q] = 1; st.push(q); } }
+  }
+  return { coverage: cov / (w * h), pieces };
+};
+{
+  const w = 80, h = 80, res = {};
+  for (const [name, pr] of Object.entries(TU.PRESETS)) {
+    const sim = TU.createSim({ w, h, dark: flat(w, h), F: pr.F, k: pr.k, influence: 0, seed: 1, backend: "cpu" });
+    sim.step(4000);
+    res[name] = measure(sim.read(), w, h);
+  }
+  const fmt = (r) => `${Math.round(r.coverage * 100)}% / ${r.pieces}`;
+  // spots: many separate dots about 16 cells apart (80 × 80 cells → roughly 25)
+  ok(res.spots.pieces >= 12 && res.spots.pieces <= 45 && res.spots.coverage < 0.35, `turing spots: ${fmt(res.spots)} (coverage / pieces)`);
+  ok(res.maze.coverage > 0.3 && res.maze.coverage < 0.7 && res.maze.pieces < 15, `turing maze: ${fmt(res.maze)}`);
+  ok(res.coral.coverage > 0.3 && res.coral.coverage < 0.7, `turing coral: ${fmt(res.coral)}`);
+  ok(res.stripes.coverage > 0.25 && res.stripes.coverage < 0.6 && res.stripes.pieces > res.maze.pieces, `turing stripes: ${fmt(res.stripes)}`);
 
-// Image Trace on the same synthetic image
-for (const mode of ["bw", "gray", "colour"]) {
-  const tr = DH.trace.traceMap(base, { mode, threshold: 128, colours: 3, paths: 60, corners: 50, noiseMm: 0.5, ignoreWhite: true, darkHigh: true, alphaMask: true }, grid.p);
-  const c = DH.raster.levelStats(tr.lv, tr.levels);
-  ok(tr.levels >= 1 && c.slice(1).some((n) => n > 0) && tr.swatches.length === tr.levels, `trace ${mode}: ${tr.levels} levels ${JSON.stringify(c)} ${tr.swatches.join(" ")}`);
+  // the image steers it: left half dark, right half light, full influence
+  const dark = new Float32Array(w * h).map((_, i) => (i % w < w / 2 ? 0.9 : 0.1));
+  const sim = TU.createSim({ w, h, dark, F: TU.PRESETS.maze.F, k: TU.PRESETS.maze.k, influence: 1, seed: 1, backend: "cpu" });
+  sim.step(4000);
+  const V = sim.read(); let top = 1e-4; for (const v of V) top = Math.max(top, v);
+  let L = 0, R = 0; for (let i = 0; i < w * h; i++) if (V[i] / top > 0.5) (i % w < w / 2 ? L++ : R++);
+  ok(L > R * 1.5, `turing image influence: dark half ${Math.round((L / (w * h / 2)) * 100)}% printed, light half ${Math.round((R / (w * h / 2)) * 100)}%`);
+
+  // same seed → same pattern; another seed → another pattern
+  const run = (seed) => { const s = TU.createSim({ w: 40, h: 40, dark: flat(40, 40), F: 0.029, k: 0.057, influence: 0, seed, backend: "cpu" }); s.step(800); return s.read(); };
+  const a = run(5), b = run(5), c = run(6);
+  ok(a.every((v, i) => v === b[i]) && a.some((v, i) => v !== c[i]), "turing random seed: repeatable, and changes the pattern");
+}
+
+// The pipeline used by the rest of the tests: synthetic leaf → tones → Turing
+// (maze, 6 mm) → 2 height levels → printability filter.
+const t0 = Date.now();
+const sg = TU.gridFor(60, 40, 6);
+const smp = TU.sample(base.gray, base.alpha, grid.w, grid.h, sg.w, sg.h);
+const tsim = TU.createSim({ w: sg.w, h: sg.h, dark: smp.dark, ok: smp.ok, F: TU.PRESETS.maze.F, k: TU.PRESETS.maze.k, influence: 0.6, seed: 2, backend: "cpu" });
+tsim.step(3000);
+const V = tsim.read();
+const raw = TU.toLevels(V, sg.w, sg.h, grid.w, grid.h, { levels: 2, invert: false }, base.alpha);
+const rawCounts = DH.raster.levelStats(raw, 2);
+const inv = TU.toLevels(V, sg.w, sg.h, grid.w, grid.h, { levels: 1, invert: true }, base.alpha);
+const invCount = DH.raster.levelStats(inv, 1)[1];
+ok(rawCounts[1] > 0 && rawCounts[2] > 0, `turing posterized into 2 levels: ${JSON.stringify(rawCounts)} (${sg.w}×${sg.h} cells, ${Date.now() - t0} ms)`);
+ok(invCount > 0 && Math.abs(invCount - rawCounts[0]) < grid.w * grid.h * 0.05, `turing invert prints the gaps: ${invCount} vs ${rawCounts[0]} pixels`);
+const filt = DH.printability.filter(raw, grid.w, grid.h, 2, grid.p, { minWidthMm: 0.5, minAreaMm2: 0.5 });
+const lv = filt.lv;
+const counts = DH.raster.levelStats(lv, 2);
+ok(counts[1] > 0 && counts[2] > 0, "two levels present after the printability filter " + JSON.stringify(counts));
+
+// Printability filter: a 0.3 mm line and a 0.2 mm² island go, a 5 mm blob stays.
+{
+  const p = 0.05, w = 300, h = 200, t = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const X = x * p, Y = y * p;
+    if (Math.hypot(X - 4, Y - 5) < 2.5) t[y * w + x] = 1;          // blob
+    if (X > 8 && X < 14 && Math.abs(Y - 5) < 0.15) t[y * w + x] = 1; // thin line
+    if (Math.hypot(X - 12, Y - 8) < 0.25) t[y * w + x] = 1;        // tiny island
+  }
+  const r = DH.printability.filter(t, w, h, 1, p, { minWidthMm: 0.5, minAreaMm2: 0.5 });
+  const at = (X, Y) => Math.round(Y / p) * w + Math.round(X / p);
+  ok(r.lv[at(4, 5)] === 1 && r.lv[at(11, 5)] === 0 && r.lv[at(12, 8)] === 0 && r.removed[at(11, 5)] === 1 && r.removed[at(12, 8)] === 1 && r.removed[at(4, 5)] === 0,
+    "printability: thin line and tiny island removed (and marked red), blob kept");
 }
 
 const print = { nozzle: 0.4, lineWidth: 0.45, layerHeight: 0.2, layersPerLevel: 2, firstLayerZ: 0.2, zOffset: 0, speed: 40, firstSpeed: 15, travelSpeed: 150, firstLayerFlow: 1.1, skipLeveling: true, pauseLayer: 0, bedType: "Textured PEI Plate", retractMinTravel: 2, zHop: 0.4, simplify: 0.03, colourChanges: true };
@@ -178,7 +242,7 @@ for (const pr of DH.PRINTERS) {
   // Higher level: the parts of the same line inside the smaller field, so every
   // knot there sits on a knot of the level below.
   const f2 = DH.raster.levelField(lv, grid.w, grid.h, 2, grid.p);
-  const upper = DH.coral.clip(res, f2, 0.6);
+  const upper = DH.coral.clip(res, f2, 0.2); // small margin: level-2 ridges of the test maze are narrow
   const below = new Set(res.flatMap((q) => q.pts.filter((_, i) => q.knots[i]).map((v) => v.join(","))));
   const stacked = upper.every((q) => q.pts.every((v, i) => !q.knots[i] || below.has(v.join(","))));
   ok(upper.length > 0 && stacked, `coral level 2 reuses level 1's line: ${upper.length} pieces, every knot on a knot below`);

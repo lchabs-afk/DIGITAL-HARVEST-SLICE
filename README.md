@@ -2,7 +2,7 @@
 
 Step 3 of **Digital Harvest**: *picking* (3D-scanning nature with Polycam) → *pressing* (the 2D UV texture from Blender's UV editor) → **embroidering** (printing that texture directly onto textile).
 
-This browser app traces the pressed UV texture into a few flat shapes, like Illustrator's Image Trace, and writes the G-code itself, with no slicer. Fill paths imitate embroidery stitches, and up to five height levels build a stepped relief, each in its own filament colour.
+This browser app grows a Turing pattern (reaction-diffusion) across the pressed UV texture, steered by the plant's tones, and writes the G-code itself, with no slicer. Fill paths imitate embroidery stitches, and up to five height levels build a stepped relief, each in its own filament colour.
 
 Everything runs in the browser. No server, no install, and your image never leaves your computer.
 
@@ -14,12 +14,22 @@ Everything runs in the browser. No server, no install, and your image never leav
 ### The five panels
 
 1. **Import:** drop a PNG/JPG, set the output width in mm (the height follows the aspect ratio), and offset it from the bed centre. Transparent pixels are never printed.
-2. **Image trace:** works like Illustrator's Image Trace. Choose *b&w* (threshold), *grayscale* or *colour* (1–5 tones, clustered in the OKLab colour space), then set paths, corners, noise and ignore white. Each tone becomes one height level, darkest tallest by default. *Use as filament colours* copies the traced colours to the level colours.
+2. **Turing pattern:** a Gray-Scott reaction-diffusion simulation turns the image into shapes. The pipeline is: image → grayscale + levels/contrast → Turing reaction-diffusion → height levels → printability filter → vectorize → stitches → G-code.
+   - **Pattern:** *spots*, *stripes*, *maze* or *coral*. Feed and kill are under *advanced*.
+   - **Pattern scale:** the distance between neighbouring spots or stripes, in mm, so the pattern can match the nozzle.
+   - **Image influence:** how strongly the plant's tones steer the pattern. Each cell's darkness shifts its feed and kill: dark areas get a denser pattern, light areas thin out to bare fabric, so a white background stays unprinted.
+   - **Iterations,** with a live preview while it runs, plus **pause / resume** (pausing builds the toolpaths from the pattern as it is) and **restart**.
+   - **Random seed** and **invert** (print the gaps).
+   - **Height levels:** the final concentration is posterized into 1–5 heights, so the cores of spots and stripes stand tallest.
+   - **Image:** levels (black point, white point, midtones) and contrast before the simulation.
+   - **Printability:** removes parts narrower than the *minimum feature width* and islands smaller than the *minimum area* (smaller holes are filled). The *turing* tab shows what was removed in red.
+
+   It runs on the GPU (WebGL2 with float textures), so the preview stays fast. Browsers without WebGL2 fall back to the same equations in JavaScript on a coarser grid.
 3. **Stitch & print:** a pattern per level: *Satin* (dense zigzag), *Fill / tatami* (parallel lines, optionally rotated each layer), *Contour* (concentric inward rings), *Running stitch* (outline, optionally dashed), *Outline + fill*, or *Dots (pointillism)*. Dots are single blobs of plastic, each pushed out in place with no movement, on a *grid*, *hex* grid or *scatter* layout. With *follow the picture's tones* on, grid dots grow in dark areas (halftone) and scattered dots bunch up there (stippling). Dots sit in the same place on every layer, so they stack into small columns. How a dot is printed: the nozzle travels high, comes down just above the surface and pushes the blob out while rising to the *dot height*, which builds a small dome. Then it pauses, retracts and lifts quickly so the thread between dots snaps. Tune it with *dot height*, *dot flow* (raise it if dots come out too small, since fabric soaks some up), *pause after each dot*, *retraction after each dot* (raise it for strings, keep it low for TPU) and *lift between dots*. On later layers each dot lands on the one below, one dot height higher. Expect long print times for big or dense designs.
 
 **Coral** grows one line per shape by differential growth, and the preview animates it. Points repel nearby points, attract their two neighbours, and a new point appears where two neighbours drift apart. The line stays inside the shape, never crosses itself, and folds more densely where the picture is darker. The line is then printed as **knots joined by a continuous thread**: at every knot point the nozzle pushes a knot while rising (using the dot settings: knot size, height, flow and pause), and between points it keeps extruding as it moves. Inside a line there is no travel and no retraction, only at its end. The settings are knot spacing, knot size, thread flow (separate from knot flow), minimum spacing between line parts (twice the knot size until you change it), growth steps, random seed, follow the tones, and knots every N points (plain thread in between). When consecutive levels all use Coral with the same growth settings, the line grows once on the lowest level, and higher levels reprint the parts of it inside their shape, so the knots stack into columns. On those higher levels a shape can therefore hold a few pieces of the line rather than exactly one. Then line width, layer height, layers per level, first-layer Z, Z offset, speeds, first-layer flow, retraction and a pause layer for sandwich mode.
 4. **Machine & material:** a Bambu Lab printer (A1 mini, A1, P1P, P1S, X1 Carbon, H2D), nozzle, build plate, *skip auto bed leveling*, an editable material (PLA / PETG / TPU 95A, or your own saved presets), a filament colour per level, and **Export test square**.
-5. **Preview & export:** original, trace or toolpath view with a layer slider, travel moves dashed, colour by filament or by layer. A status line shows the time and the filament weight per colour. **Export G-code** saves `name.gcode`.
+5. **Preview & export:** original, turing or toolpath view with a layer slider, travel moves dashed, colour by filament or by layer. A status line shows the time and the filament weight per colour. **Export G-code** saves `name.gcode`.
 
 **Save preset** / **Load preset** write and read every setting as a JSON file, e.g. `fern_satin.json`.
 
@@ -35,7 +45,7 @@ Copy the `.gcode` file to the root of the printer's SD card and start it from th
 - **Leveling:** the Bambu start sequence probes the bed, and the probe can misread fabric. With *Skip auto bed leveling* on, the `G29` probe commands inside the start G-code's bed-leveling block are commented out. Level once on the bare plate first.
 - **Colour changes:** when the next level has a different colour, the print lifts 5 mm and pauses with `M400 U1` at that level's first layer. Swap the filament on the printer, then resume.
 - **Sandwich mode:** *Pause before layer N* pauses the same way, so you can lay fabric over the first layers.
-- **Magnet keep-out frame (optional):** if magnets hold the fabric around the plate, turn on *Magnet keep-out frame* in *Machine & material*. It's an imaginary frame centred on the bed: 235 × 235 mm outside with a 15 mm magnet band and 10 mm magnet height by default, which leaves 205 × 205 mm inside. The nozzle stays a margin (5 mm by default) inside the band, and export is blocked if the design reaches into it. Any move that crosses the band happens above the magnets (magnet height + clearance, 12 mm by default). That covers the move in after the start routine, filament-change pauses and the lift before the end routine. *Pause to lay the fabric and magnets* stops once the printer's own start routine has finished, because that routine (purge line, calibration, leveling) moves low across the plate.
+- **Magnet keep-out frame (optional):** if magnets hold the fabric around the plate, turn on *Magnet keep-out frame* at the bottom of *Machine & material*. It's an imaginary frame centred on the bed: 235 × 235 mm outside with a 15 mm magnet band and 10 mm magnet height by default, which leaves 205 × 205 mm inside. The nozzle stays a margin (5 mm by default) inside the band, and export is blocked if the design reaches into it. Any move that crosses the band happens above the magnets (magnet height + clearance, 12 mm by default). That covers the move in after the start routine, filament-change pauses and the lift before the end routine. *Pause to lay the fabric and magnets* stops once the printer's own start routine has finished, because that routine (purge line, calibration, leveling) moves low across the plate.
 
 ## How it works
 
@@ -43,7 +53,8 @@ Copy the `.gcode` file to the root of the printer's SD card and start it from th
 |---|---|
 | `js/raster.js` | working grid, grayscale/RGB copy, despeckle, and the signed distance field of each level |
 | `js/coral.js` | Coral: differential growth of one polyline per shape (repulsion, neighbour attraction, insertion; stays inside, never self-crossing), resampled into knots |
-| `js/trace.js` | Image Trace: threshold or k-means clustering (OKLab) → level map, with corner rounding and noise removal |
+| `js/turing.js` | Gray-Scott reaction-diffusion (WebGL2, with a JavaScript fallback), image-steered feed/kill, posterize into height levels |
+| `js/printability.js` | printability filter: minimum feature width (opening), minimum island/hole area, and the removed areas for the red preview |
 | `js/geometry.js` | exact Euclidean distance transform, marching-squares iso-contours, Douglas–Peucker simplification, scanline clipping |
 | `js/stitches.js` | distance field → stitch toolpaths (outlines are iso-contours at ½, 1½ … line widths inside the edge) |
 | `js/gcode.js` | toolpaths → G-code: nearest-neighbour ordering, relative E, volumetric speed cap, retraction and Z-hop, pauses, Bambu header, `;LAYER:` / `;TYPE:` / `; FEATURE:` comments |
@@ -71,15 +82,17 @@ python3 tools/import_bambu.py BambuStudio
 node tests/run_tests.js
 ```
 
-The tests check the template interpreter, the image trace on a synthetic image, every stitch pattern, and a full G-code build for every printer, with no unresolved placeholders and no NaN moves.
+The tests check the template interpreter, the Turing presets (spots, stripes, maze, coral), image influence, seeds, posterizing and invert, the printability filter, every stitch pattern, and a full G-code build for every printer, with no unresolved placeholders and no NaN moves.
 
 ## Status and roadmap
 
-- Done: milestones 1–5 of the spec (import and image trace, Bambu profiles plus test square, all stitch patterns, height levels with manual colour change, toolpath preview, stats, presets).
+- Done: milestones 1–5 of the spec (import and Turing pattern, Bambu profiles plus test square, all stitch patterns, height levels with manual colour change, toolpath preview, stats, presets).
 - **Not yet tested on a printer.** Print the test square first on each printer.
 - **H2D:** its start G-code is written for two nozzles. The app fills it in for one filament on one nozzle (`filament_map = 1`), so check that one with the test square before anything else.
 - Next, milestone 6: export `.gcode.3mf` so files can go through Bambu Studio / Handy with AMS slot mapping and automatic colour changes.
 
 ## Credits
+
+The Turing-pattern step is inspired by [TexTuring](https://ivan-murit.fr/) by [Ivan Murit](https://ivan-murit.fr/) ([source](https://github.com/ivangrozny/TexTuring)), a dithering tool that grows reaction-diffusion patterns on images. This app's simulation is its own implementation; no TexTuring code is used.
 
 The interface is set in [Hasköy](https://github.com/ertekinno/haskoy) by Ertekin Erdin. It is licensed under the SIL Open Font License 1.1 (see `fonts/Haskoy-OFL.txt`) and served from this repo.

@@ -24,7 +24,8 @@
   }
 
   // Level map → small canvas, coloured by filament colour per level.
-  function levelCanvas(lv, w, h, colours) {
+  // `removed` (optional) marks pixels the printability filter took away: red.
+  function levelCanvas(lv, w, h, colours, removed) {
     const c = document.createElement("canvas");
     c.width = w; c.height = h;
     const g = c.getContext("2d");
@@ -35,6 +36,7 @@
     });
     for (let i = 0; i < lv.length; i++) {
       const k = lv[i];
+      if (removed && removed[i] && !k) { d[i * 4] = 214; d[i * 4 + 1] = 40; d[i * 4 + 2] = 40; d[i * 4 + 3] = 255; continue; }
       if (!k) continue;
       const [r, gg, b] = rgb[k - 1] || [0, 0, 0];
       d[i * 4] = r; d[i * 4 + 1] = gg; d[i * 4 + 2] = b; d[i * 4 + 3] = 255;

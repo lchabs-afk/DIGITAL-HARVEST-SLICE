@@ -10,7 +10,9 @@
     coralSpacing: 2, coralThreadFlow: 0.6, coralSep: 2.4, coralSteps: 300, coralSeed: 1, coralKnotEvery: 1, coralSepAuto: true };
   const DEFAULTS = {
     import: { widthMm: 80, offX: 0, offY: 0, mirror: false },
-    trace: { mode: "colour", threshold: 128, colours: 3, paths: 60, corners: 50, noiseMm: 0.5, ignoreWhite: true, darkHigh: true, alphaMask: true },
+    tone: { black: 0, white: 255, gamma: 1, contrast: 0 },
+    turing: { preset: "maze", F: 0.029, k: 0.057, scaleMm: 3, influence: 0.6, iterations: 5000, seed: 1, invert: false, levels: 2 },
+    printable: { minWidthMm: 0.5, minAreaMm2: 0.5, simplify: 0.03, alphaMask: true },
     machine: { printer: "a1mini", nozzle: 0.4, bedType: "Textured PEI Plate", skipLeveling: true },
     material: Object.assign({}, DH.MATERIALS[0]),
     colours: [
@@ -56,8 +58,8 @@
     ks.reduce((o, k) => o[k], state)[last] = v;
   }
   const printer = () => DH.PRINTERS.find((p) => p.id === state.machine.printer) || DH.PRINTERS[0];
-  // Number of height levels the trace produces.
-  const levelCount = () => (state.trace.mode === "bw" ? 1 : state.trace.colours);
+  // Number of height levels the Turing pattern is posterized into.
+  const levelCount = () => Math.max(1, Math.min(5, state.turing.levels));
 
   // Optional frame on the plate, centred on the bed. Returns rectangles
   // [x0, y0, x1, y1] in bed mm: the outer edge, the inner edge, and the safe
@@ -89,7 +91,9 @@
   }
 
   // ---------------------------------------------------------------- field builder
-  const NEXT = { size: onSize, trace: onTrace, paths: onPaths, gcode: onGcode, none: () => {} };
+  // size: new working grid; turing: restart the simulation; levels: re-posterize
+  // and re-filter the finished pattern (no new simulation); paths / gcode: rebuild.
+  const NEXT = { size: onSize, turing: onTuring, levels: onLevels, paths: onPaths, gcode: onGcode, none: () => {} };
 
   // Slider end labels in the [04] [07] [10] style.
   function tickLabel(v, step) {
@@ -190,49 +194,47 @@
     renderColours(); renderStitch();
   }
 
-  // Panel 02: Image Trace turns the picture into flat tones, one per height level.
-  function renderTrace() {
-    const t = state.trace, specs = [
-      { path: "trace.mode", label: "Mode", type: "seg", wide: true, options: [["bw", "b&w"], ["gray", "grayscale"], ["colour", "colour"]], on: "trace",
-        after: () => { renderTrace(); levelsChanged(); } },
-    ];
-    if (t.mode === "bw") {
-      specs.push({ path: "trace.threshold", label: "Threshold", type: "range", min: 0, max: 255, step: 1, unit: "", on: "trace", help: "Pixels darker than this are printed." });
-    } else {
-      specs.push({ path: "trace.colours", label: t.mode === "gray" ? "Grays" : "Colours", type: "seg", options: [1, 2, 3, 4, 5].map((n) => [n, String(n)]), on: "trace",
-        after: levelsChanged, help: "How many tones to keep. Each one is printed as its own height level." });
-    }
-    specs.push(
-      { path: "trace.paths", label: "Paths", type: "range", min: 0, max: 100, step: 1, unit: "%", on: "paths", help: "High follows the pixels closely; low gives smoother, simpler paths." },
-      { path: "trace.corners", label: "Corners", type: "range", min: 0, max: 100, step: 1, unit: "%", on: "trace", help: "High keeps sharp corners; low rounds them." },
-      { path: "trace.noiseMm", label: "Noise", type: "range", min: 0, max: 5, step: 0.1, unit: "mm", on: "trace", help: "Ignores islands and holes smaller than this." },
-    );
-    if (t.mode !== "bw") specs.push({ path: "trace.ignoreWhite", label: "Ignore white", type: "check", on: "trace", help: "Leaves the lightest tone as bare fabric." });
-    specs.push(
-      { path: "trace.darkHigh", label: "Dark areas are the tallest", type: "check", on: "trace" },
-      { path: "trace.alphaMask", label: "Never print transparent pixels", type: "check", on: "trace" },
-    );
-    fill("f-trace", specs);
-    renderTracedColours();
+  // Panel 02: the Turing pattern, the image adjustments that steer it, and
+  // the printability filter applied to the result.
+  function renderTuring() {
+    const t = state.turing, presets = DH.turing.PRESETS;
+    fill("f-turing", [
+      { path: "turing.preset", label: "Pattern", type: "seg", wide: true, options: Object.entries(presets).map(([k, v]) => [k, v.label.toLowerCase()]), on: "turing",
+        after: (v) => { t.F = presets[v].F; t.k = presets[v].k; renderTuring(); } },
+      { path: "turing.scaleMm", label: "Pattern scale", type: "range", min: 0.5, max: 20, step: 0.1, unit: "mm", on: "turing",
+        help: "Distance between neighbouring spots or stripes. About 4–8× the line width prints well." },
+      { path: "turing.influence", label: "Image influence", type: "range", min: 0, max: 1, step: 0.01, unit: "", on: "turing",
+        help: "How strongly the plant's tones steer the pattern. 0 ignores the image; at 1, light areas thin out to bare fabric and dark areas fill in." },
+      { path: "turing.iterations", label: "Iterations", type: "range", min: 200, max: 20000, step: 100, unit: "", on: "turing",
+        help: "How long the pattern grows. It settles after a few thousand." },
+      { path: "turing.seed", label: "Random seed", type: "range", min: 1, max: 999, step: 1, unit: "", on: "turing" },
+      { path: "turing.levels", label: "Height levels", type: "seg", options: [1, 2, 3, 4, 5].map((n) => [n, String(n)]), on: "levels", after: levelsChanged,
+        help: "The pattern's concentration is posterized into this many heights: the cores of spots and stripes stand tallest." },
+      { path: "turing.invert", label: "Invert (print the gaps)", type: "check", on: "levels" },
+    ]);
+    // the preset buttons show no selection once feed / kill are set by hand
+    const custom = !Object.entries(presets).some(([k, v]) => k === t.preset && v.F === t.F && v.k === t.k);
+    if (custom) $("f-turing").querySelectorAll(".seg button").forEach((b, i) => { if (i < 4) b.setAttribute("aria-pressed", "false"); });
+    fill("f-turing-adv", [
+      { path: "turing.F", label: "Feed (F)", type: "range", min: 0.01, max: 0.1, step: 0.0005, unit: "", on: "turing", after: () => renderTuring() },
+      { path: "turing.k", label: "Kill (k)", type: "range", min: 0.04, max: 0.075, step: 0.0005, unit: "", on: "turing", after: () => renderTuring(),
+        help: "The presets set these. Small changes move between spots, stripes, mazes and coral; far from them the pattern can die out or fill everything." },
+    ]);
+    fill("f-tone", [
+      { path: "tone.black", label: "Levels: black point", type: "range", min: 0, max: 254, step: 1, unit: "", on: "turing" },
+      { path: "tone.white", label: "Levels: white point", type: "range", min: 1, max: 255, step: 1, unit: "", on: "turing" },
+      { path: "tone.gamma", label: "Levels: midtones (gamma)", type: "range", min: 0.2, max: 4, step: 0.05, unit: "", on: "turing" },
+      { path: "tone.contrast", label: "Contrast", type: "range", min: -90, max: 90, step: 1, unit: "", on: "turing" },
+    ]);
+    fill("f-printable", [
+      { path: "printable.minWidthMm", label: "Minimum feature width", type: "range", min: 0, max: 3, step: 0.05, unit: "mm", on: "levels",
+        help: "Removes parts of the pattern narrower than this. Shown in red on the turing tab." },
+      { path: "printable.minAreaMm2", label: "Minimum island and hole area", type: "range", min: 0, max: 20, step: 0.1, unit: "mm²", on: "levels" },
+      { path: "printable.simplify", label: "Path simplification", type: "range", min: 0, max: 0.3, step: 0.01, unit: "mm", on: "paths" },
+      { path: "printable.alphaMask", label: "Never print transparent pixels", type: "check", on: "turing" },
+    ]);
   }
 
-  let traced = [];
-  function renderTracedColours() {
-    const box = $("tracedSwatches");
-    box.innerHTML = "";
-    traced.forEach((hex, k) => {
-      const s = document.createElement("span");
-      s.innerHTML = `<i style="background:${hex}"></i>l${k + 1}`;
-      box.appendChild(s);
-    });
-    $("useTraced").disabled = !traced.length;
-  }
-  function useTracedColours() {
-    traced.forEach((hex, k) => { if (state.colours[k]) state.colours[k].hex = hex; });
-    lvCanvas = null;
-    renderColours(); renderStitchTabs(); updateLegend(); updateStats(); redraw(); save();
-    toast("Filament colours set from the trace");
-  }
 
   function renderMachine() {
     const p = printer();
@@ -455,7 +457,7 @@
   }
 
   function renderAll() {
-    renderImport(); renderTrace(); renderMachine(); renderMaterial(); renderColours(); renderStitch(); renderPrint();
+    renderImport(); renderTuring(); renderMachine(); renderMaterial(); renderColours(); renderStitch(); renderPrint();
     $("fileName").value = state.fileName || $("fileName").value;
   }
 
@@ -486,26 +488,107 @@
     g.drawImage(src, 0, 0, grid.w, grid.h);
     base = DH.raster.toGray(g.getImageData(0, 0, grid.w, grid.h));
     updateSizeLine();
-    onTrace();
+    onTuring();
   }
 
-  let traceRaf = 0;
-  function onTrace() {
-    cancelAnimationFrame(traceRaf);
-    traceRaf = requestAnimationFrame(() => {
-      if (!base) return;
-      const r = DH.trace.traceMap(base, state.trace, grid.p);
-      lv = r.lv; traced = r.swatches;
-      renderTracedColours();
-      const N = levelCount();
-      const counts = DH.raster.levelStats(lv, N);
-      presentLevels = 0;
-      for (let k = 1; k <= N; k++) if (counts.slice(k).some((n) => n > 0)) presentLevels = k;
-      lvCanvas = null;
-      fields = {}; growCache = {};
-      onPaths();
-      if (view === "trace") redraw();
-    });
+  // Image tones after levels / contrast: lightness 0 (black) … 1 (white).
+  function toneMap() {
+    const t = state.tone, n = base.gray.length, out = new Float32Array(n);
+    const lo = t.black / 255, hi = Math.max(lo + 1 / 255, t.white / 255), g = 1 / Math.max(0.05, t.gamma);
+    const c = t.contrast / 100, cf = c >= 0 ? 1 / Math.max(0.02, 1 - c) : 1 + c;
+    for (let i = 0; i < n; i++) {
+      let v = Math.min(1, Math.max(0, (base.gray[i] - lo) / (hi - lo)));
+      v = Math.pow(v, g);
+      out[i] = Math.min(1, Math.max(0, (v - 0.5) * cf + 0.5));
+    }
+    return out;
+  }
+
+  // ---- the Turing simulation: runs in animation frames, live preview, pausable
+  let sim = null, simGrid = null, simV = null, simPaused = false, simToken = 0, tone = null, removed = null;
+  function onTuring() {
+    simToken++;
+    if (sim) { sim.destroy(); sim = null; }
+    simV = null; simPaused = false;
+    lv = null; result = null; presentLevels = 0;
+    if (!base) { updateSimControls(); return; }
+    tone = toneMap();
+    const t = state.turing;
+    simGrid = DH.turing.gridFor(state.import.widthMm, heightMm(), t.scaleMm, DH.turing.gpuAvailable() ? 600000 : 60000);
+    const s = DH.turing.sample(tone, state.printable.alphaMask ? base.alpha : null, grid.w, grid.h, simGrid.w, simGrid.h);
+    sim = DH.turing.createSim({ w: simGrid.w, h: simGrid.h, dark: s.dark, ok: s.ok, F: t.F, k: t.k, influence: t.influence, seed: t.seed });
+    runSim(simToken);
+  }
+  function runSim(token) {
+    let chunk = sim.backend === "webgl" ? 40 : 2, frames = 0;
+    const frame = () => {
+      if (token !== simToken || !sim) return;
+      if (!simPaused) {
+        const t0 = performance.now();
+        sim.step(Math.min(chunk, state.turing.iterations - sim.iteration));
+        const dt = performance.now() - t0;
+        chunk = Math.max(1, Math.min(400, Math.round(chunk * (dt > 0 ? 14 / dt : 2)))); // aim for ~14 ms per frame
+        if (frames++ % 2 === 0 || sim.iteration >= state.turing.iterations) drawSim(sim.read());
+      }
+      updateSimControls();
+      if (sim.iteration >= state.turing.iterations) { finishSim(); return; }
+      requestAnimationFrame(frame);
+    };
+    updateSimControls();
+    requestAnimationFrame(frame);
+  }
+  function finishSim() {
+    simV = sim.read();
+    updateSimControls();
+    onLevels();
+  }
+  function pauseSim() {
+    if (!sim || sim.iteration >= state.turing.iterations) return;
+    simPaused = !simPaused;
+    // pausing builds the toolpaths from the pattern as it is now
+    if (simPaused) { simV = sim.read(); onLevels(); }
+    updateSimControls();
+  }
+  function updateSimControls() {
+    const running = sim && sim.iteration < state.turing.iterations;
+    $("simPause").disabled = !running;
+    $("simPause").textContent = simPaused ? "resume" : "pause";
+    $("simRestart").disabled = !base;
+    $("simStatus").textContent = !sim ? "" : `[ ${sim.iteration.toLocaleString("en")} / ${state.turing.iterations.toLocaleString("en")} · ${sim.backend === "webgl" ? "gpu" : "cpu"}${simPaused ? " · paused" : running ? "" : " · done"} ]`;
+  }
+  // live view of the concentration while it grows
+  function drawSim(V) {
+    if (view === "original" || !simGrid) return;
+    const { w, h } = simGrid, c = document.createElement("canvas");
+    c.width = w; c.height = h;
+    const g = c.getContext("2d"), img = g.createImageData(w, h);
+    let top = 1e-4;
+    for (let i = 0; i < V.length; i++) if (V[i] > top) top = V[i];
+    const ink = [29, 29, 28], paper = [227, 227, 224];
+    for (let i = 0; i < V.length; i++) {
+      const a = Math.min(1, V[i] / top);
+      for (let ch = 0; ch < 3; ch++) img.data[i * 4 + ch] = paper[ch] + (ink[ch] - paper[ch]) * a;
+      img.data[i * 4 + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    DH.preview.fitImage($("view"), c, 14);
+  }
+
+  // Finished (or paused) pattern → height levels → printability filter.
+  function onLevels() {
+    if (!simV || !base) return;
+    const mask = state.printable.alphaMask ? base.alpha : null;
+    const N = levelCount();
+    const raw = DH.turing.toLevels(simV, simGrid.w, simGrid.h, grid.w, grid.h, state.turing, mask);
+    const f = DH.printability.filter(raw, grid.w, grid.h, N, grid.p, state.printable);
+    lv = f.lv; removed = f.removed;
+    const counts = DH.raster.levelStats(lv, N);
+    presentLevels = 0;
+    for (let k = 1; k <= N; k++) if (counts.slice(k).some((n) => n > 0)) presentLevels = k;
+    lvCanvas = null;
+    fields = {}; growCache = {};
+    onPaths();
+    if (view === "turing") redraw();
   }
   function onPaths() { pathCache = {}; onGcode(); }
   let genTimer = 0;
@@ -521,7 +604,7 @@
     const p = state.print;
     return Object.assign({}, p, {
       nozzle: state.machine.nozzle, bedType: state.machine.bedType, skipLeveling: state.machine.skipLeveling,
-      simplify: DH.trace.simplifyFor(state.trace.paths), colourChanges: state.colourChanges,
+      simplify: state.printable.simplify, colourChanges: state.colourChanges,
     });
   }
 
@@ -550,7 +633,7 @@
     for (let k = 1; k <= presentLevels; k++) {
       if (!fields[k]) {
         fields[k] = DH.raster.levelField(lv, grid.w, grid.h, k, grid.p);
-        if (fields[k]) fields[k].tone = base.gray; // for dots that follow the picture's tones
+        if (fields[k]) fields[k].tone = tone; // for dots and coral that follow the picture's tones
         await tick();
         if (token !== genToken) return null;
       }
@@ -646,9 +729,10 @@
     $("legend").hidden = view === "original";
     if (!src) { const g = canvas.getContext("2d"); g.clearRect(0, 0, canvas.width, canvas.height); return; }
     if (view === "original") { DH.preview.fitImage(canvas, src, 14); return; }
-    if (view === "trace") {
+    if (sim && !simV) { drawSim(sim.read()); return; } // still growing: show it live
+    if (view === "turing") {
       if (!lv) return;
-      if (!lvCanvas) lvCanvas = DH.preview.levelCanvas(lv, grid.w, grid.h, state.colours);
+      if (!lvCanvas) lvCanvas = DH.preview.levelCanvas(lv, grid.w, grid.h, state.colours, removed);
       DH.preview.fitImage(canvas, lvCanvas, 14);
       return;
     }
@@ -681,6 +765,7 @@
       }
     }
     if (view === "paths" && $("showTravel").checked) add(`<i class="travel"></i>travel (current layer)`);
+    if (view === "turing") add(`<i style="background:#d62828"></i>removed by the printability filter`);
   }
   const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -728,7 +813,7 @@
       const [a, b, c, d] = pr.excludeArea;
       if (pl.x0 < c && pl.x0 + pl.W > a && pl.y0 < d && pl.y0 + pl.H > b) add("", "The design overlaps the printer's excluded corner (the purge chute area).");
     }
-    if (!presentLevels || (result && !result.stats.extrudeLen && !result.stats.dots && !result.stats.knots)) add("bad", "Nothing to print: change the threshold or colours, turn off ignore white, or lower the noise.");
+    if (!presentLevels || (result && !result.stats.extrudeLen && !result.stats.dots && !result.stats.knots)) add("bad", "Nothing to print: change the pattern, lower the image influence, or relax the printability filter.");
     const z1 = s.firstLayerZ + s.zOffset;
     if (z1 < s.layerHeight * 0.5) add("info", `Layer 1 prints with the nozzle at Z ${z1.toFixed(2)} mm. That's meant for fabric; on a bare plate the nozzle would block. Set Z offset to your fabric's compressed thickness if needed.`);
     const noz = state.machine.nozzle;
@@ -766,7 +851,7 @@
   async function exportGcode() {
     if (stale) { clearTimeout(genTimer); await generate(); }
     if (!result) { toast(error ? "Fix the error shown in the preview panel first." : (src ? "Nothing to export yet." : "Load an image first.")); return; }
-    if (!result.stats.extrudeLen && !result.stats.dots && !result.stats.knots) { toast("Nothing to print: adjust the trace settings."); return; }
+    if (!result.stats.extrudeLen && !result.stats.dots && !result.stats.knots) { toast("Nothing to print: adjust the Turing pattern or the printability filter."); return; }
     const fp = frameProblem(result.box);
     if (fp) { toast("Not exported: " + fp); return; }
     const name = safeName($("fileName").value) + ".gcode";
@@ -875,7 +960,8 @@
     $("saveMaterial").addEventListener("click", saveMaterial);
     $("materialFile").addEventListener("change", (e) => { if (e.target.files[0]) loadMaterial(e.target.files[0]); e.target.value = ""; });
     $("fileName").addEventListener("change", save);
-    $("useTraced").addEventListener("click", useTracedColours);
+    $("simPause").addEventListener("click", pauseSim);
+    $("simRestart").addEventListener("click", () => onTuring());
     $("dimWidth").addEventListener("input", () => { state.import.widthMm = +$("dimWidth").value; onSize(); save(); });
     new ResizeObserver(() => redraw()).observe($("canvasWrap"));
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);
