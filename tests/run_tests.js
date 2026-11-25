@@ -264,6 +264,17 @@ for (const pr of DH.PRINTERS) {
   ok(Math.abs(k3 - pts3 / 3) <= r3.length * 2, `coral knots every 3 points: ${k3} knots on ${pts3} points`);
 }
 
+// A2L: the per-layer Y acceleration limit follows Bambu Studio's rule
+// min(max Y acceleration, max Y force / (bed mass + printed mass)).
+{
+  const a2l = DH.PRINTERS.find((p) => p.id === "a2l");
+  const lim = DH.gcode.yAccelLimit;
+  const r = DH.gcode.build({ name: "a2l", printer: a2l, material: mat, print, layers, colours: [{ name: "a" }, { name: "b" }] });
+  const perLayer = (r.text.match(/^M201 N1 Y(\d+)/gm) || []).length;
+  ok(a2l && a2l.bed[0] === 330 && a2l.bed[1] === 320 && lim(a2l, 0) === 8000 && lim(a2l, 1000) === Math.round(29e6 / 3700) && perLayer === r.stats.layers,
+    `A2L: 330 × 320 mm bed, Y acceleration 8000 empty and ${lim(a2l, 1000)} with 1 kg printed, limit written on all ${perLayer} layers`);
+}
+
 const sq = DH.gcode.build({ name: "square", printer: DH.PRINTERS[0], material: mat, print, layers: DH.gcode.testSquare(DH.PRINTERS[0], print), colours: [{ name: "a" }] });
 ok(sq.stats.layers === 2, "test square: 2 layers");
 process.exit(fails ? 1 : 0);

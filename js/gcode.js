@@ -53,6 +53,15 @@
     return isFinite(x0) ? [x0, y0, x1, y1] : [0, 0, 0, 0];
   }
 
+  // Y acceleration the bed may use once `grams` of plastic sit on it, as Bambu
+  // Studio computes it: min(max Y acceleration, max Y force / (bed + print mass)).
+  // Only printers with a force and bed mass in their profile (the A2L) are limited.
+  function yAccelLimit(printer, grams) {
+    const maxY = printer.maxAccelY || printer.maxAccel || 10000;
+    if (!(printer.maxForceY > 0 && printer.bedMassY > 0)) return maxY;
+    return Math.round(Math.min(maxY, (printer.maxForceY * 1e6) / (printer.bedMassY + grams)));
+  }
+
   // Variables for Bambu Studio's start / end / layer-change templates.
   function templateVars(ctx) {
     const { printer, material: m, print: s, firstBox, maxZ, totalLayers } = ctx;
@@ -83,6 +92,10 @@
       overall_chamber_temperature: 0, min_vitrification_temperature: m.vitrification,
       has_tpu_in_first_layer: m.type === "TPU", cooling_filter_enabled: false,
       initial_layer_print_height: s.layerHeight, layer_z: 0, layer_num: 0,
+      // A2L: one filament, generic (not a Bambu-coded spool), no chamber hold
+      initial_filament_id: 0, filament_ids: [""], temperature_vitrification: [m.vitrification],
+      hold_chamber_temp_for_flat_print: false,
+      curr_y_acceleration_limit: yAccelLimit(printer, 0),
     };
   }
 
@@ -181,6 +194,12 @@
 
     // Retraction remembers its length, so dots can pull back further than lines
     // and the next prime pushes back exactly what was pulled.
+    // plastic printed so far, in grams (for the A2L's Y acceleration limit)
+    const printedGrams = () => {
+      let mm = 0;
+      for (const k in stats.perColour) mm += stats.perColour[k].filamentMm;
+      return ((mm * fArea) / 1000) * m.density;
+    };
     const retract = (len = m.retractLength, speed = m.retractSpeed) => {
       if (retractedLen > 0 || len <= 0) return;
       emit("G1 E-" + f5(len) + " F" + Math.round(speed * 60));
@@ -217,7 +236,7 @@
       emit("; Z_HEIGHT: " + f3(layerTop(j)));
       emit("; LAYER_HEIGHT: " + f3(thick[j]));
       emit(";LAYER:" + j);
-      const lc = DH.template.render(printer.layerChangeGcode || "", Object.assign({}, vars, { layer_num: j, layer_z: layerTop(j) }));
+      const lc = DH.template.render(printer.layerChangeGcode || "", Object.assign({}, vars, { layer_num: j, layer_z: layerTop(j), curr_y_acceleration_limit: yAccelLimit(printer, printedGrams()) }));
       if (lc.trim()) emit(lc.trim());
       const remaining = Math.max(0, est - elapsed);
       emit("M73 P" + Math.min(99, Math.floor((elapsed / Math.max(1, est)) * 100)) + " R" + Math.round(remaining / 60));
@@ -443,5 +462,5 @@
     return [{ colour: 0, paths }, { colour: 0, paths }];
   }
 
-  DH.gcode = { build, bbox, orderPaths, stripLeveling, templateVars, testSquare, TYPES };
+  DH.gcode = { build, bbox, yAccelLimit, orderPaths, stripLeveling, templateVars, testSquare, TYPES };
 })(globalThis.DH = globalThis.DH || {});
