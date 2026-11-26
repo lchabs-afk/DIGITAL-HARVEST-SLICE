@@ -10,7 +10,46 @@
 
   // Nearest-neighbour ordering. Closed loops may start at any vertex,
   // open paths may be reversed.
+  // Nearest-neighbour order for single dots, with a grid so it stays fast for
+  // tens of thousands of dots: from each dot, go to the closest one not yet
+  // printed (searching outwards ring by ring).
+  function orderDots(paths, start) {
+    const n = paths.length;
+    if (!n) return [];
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const p of paths) { const [x, y] = p.pts[0]; x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+    const cell = Math.max(0.5, Math.sqrt(((x1 - x0 + 1) * (y1 - y0 + 1)) / n));
+    const gw = Math.ceil((x1 - x0) / cell) + 1, gh = Math.ceil((y1 - y0) / cell) + 1;
+    const buckets = new Map(), used = new Uint8Array(n);
+    const key = (gx, gy) => gy * gw + gx;
+    paths.forEach((p, i) => { const k = key(Math.floor((p.pts[0][0] - x0) / cell), Math.floor((p.pts[0][1] - y0) / cell)); (buckets.get(k) || buckets.set(k, []).get(k)).push(i); });
+    const out = [];
+    let cx = start[0], cy = start[1];
+    for (let left = n; left > 0; left--) {
+      const gx = Math.min(gw - 1, Math.max(0, Math.floor((cx - x0) / cell))), gy = Math.min(gh - 1, Math.max(0, Math.floor((cy - y0) / cell)));
+      let best = -1, bestD = Infinity;
+      for (let r = 0; r <= Math.max(gw, gh); r++) {
+        // anything in ring r is at least (r - 1) cells away: stop once that can't beat the best
+        if (best >= 0 && (r - 1) * cell > Math.sqrt(bestD)) break;
+        for (let yy = gy - r; yy <= gy + r; yy++) for (let xx = gx - r; xx <= gx + r; xx++) {
+          if (Math.max(Math.abs(xx - gx), Math.abs(yy - gy)) !== r || xx < 0 || yy < 0 || xx >= gw || yy >= gh) continue;
+          for (const i of buckets.get(key(xx, yy)) || []) {
+            if (used[i]) continue;
+            const d = (paths[i].pts[0][0] - cx) ** 2 + (paths[i].pts[0][1] - cy) ** 2;
+            if (d < bestD) { bestD = d; best = i; }
+          }
+        }
+      }
+      used[best] = 1;
+      const p = paths[best];
+      out.push({ pts: p.pts, type: p.type, d: p.d, dot: p.dot });
+      cx = p.pts[0][0]; cy = p.pts[0][1];
+    }
+    return out;
+  }
+
   function orderPaths(paths, start) {
+    if (paths.length && paths.every((p) => p.type === "Dot" && !p.keepOrder)) return orderDots(paths, start);
     // Dots arrive already in serpentine order (there can be tens of thousands).
     if (paths.length && paths.every((p) => p.keepOrder)) return paths.map((p) => ({ pts: p.pts, type: p.type, d: p.d, dot: p.dot, coral: p.coral, knots: p.knots }));
     const left = paths.slice();
@@ -134,7 +173,7 @@
     }
     // Dot settings travel with each dot path (p.dot); these are the fallbacks.
     const dotOpts = (p) => {
-      const o = { h: 0.6, flow: 1.2, dwell: 0.3, retract: Math.max(1, m.retractLength), lift: 2 };
+      const o = { h: 0.6, flow: 1.2, dwell: 0.3, retract: Math.max(1, m.retractLength), lift: 2, correction: 1 };
       for (const k in p.dot || {}) if (Number.isFinite(p.dot[k])) o[k] = p.dot[k]; // ignore unset values
       return o;
     };
@@ -150,7 +189,10 @@
     const maxZ = total ? layerTop(total - 1) : 0;
     // Dots use the printer's full Z speed (lifts are short and a fast lift snaps the thread).
     const zSpeed = Math.max(10, printer.maxSpeedZ || 15);
-    const dotVolume = (p, flowMul) => { const o = dotOpts(p); return Math.PI * ((p.d || s.lineWidth) / 2) ** 2 * o.h * o.flow * flowMul; };
+    // A dot's volume: a disc of its diameter and the dot height. The size
+    // correction (from the dot calibration) scales the diameter the printer is
+    // asked for, so the volume scales with its square.
+    const dotVolume = (p, flowMul) => { const o = dotOpts(p); return Math.PI * (((p.d || s.lineWidth) * o.correction) / 2) ** 2 * o.h * o.flow * flowMul; };
     // Push the blob out no faster than 3 mm³/s (or the material's limit) and over at least 0.2 s.
     const dotPushTime = (vol) => Math.max(0.2, vol / Math.min(3, m.maxVolSpeed));
     // lift from the dot top, descend during the travel, short final drop, rise while pushing
@@ -462,5 +504,5 @@
     return [{ colour: 0, paths }, { colour: 0, paths }];
   }
 
-  DH.gcode = { build, bbox, yAccelLimit, orderPaths, stripLeveling, templateVars, testSquare, TYPES };
+  DH.gcode = { build, bbox, yAccelLimit, orderDots, orderPaths, stripLeveling, templateVars, testSquare, TYPES };
 })(globalThis.DH = globalThis.DH || {});

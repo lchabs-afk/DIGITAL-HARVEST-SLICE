@@ -1,6 +1,6 @@
 // node tests/run_tests.js — checks templates, geometry and G-code without a browser.
 const path = require("path");
-for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/raster.js", "js/turing.js", "js/trace.js", "js/printability.js", "js/coral.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
+for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/raster.js", "js/halftone.js", "js/trace.js", "js/printability.js", "js/coral.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
 const DH = globalThis.DH;
 let fails = 0;
 const ok = (cond, msg) => { if (!cond) { fails++; console.log("FAIL", msg); } else console.log("ok  ", msg); };
@@ -27,68 +27,56 @@ function synth(w, h) {
 }
 const grid = DH.raster.gridFor(60, 40);
 const base = DH.raster.toGray(synth(grid.w, grid.h));
-// ---- Turing patterns (JavaScript backend; the app uses the GPU when it can)
-const TU = DH.turing;
-const flat = (w, h) => new Float32Array(w * h).fill(0.5);
-const measure = (V, w, h) => {
-  let top = 1e-4; for (const v of V) top = Math.max(top, v);
-  const on = (i) => V[i] / top > 0.5;
-  let cov = 0; for (let i = 0; i < w * h; i++) cov += on(i);
-  const seen = new Uint8Array(w * h); let pieces = 0;
-  for (let s0 = 0; s0 < w * h; s0++) {
-    if (seen[s0] || !on(s0)) continue; pieces++;
-    const st = [s0]; seen[s0] = 1;
-    while (st.length) { const i = st.pop(), x = i % w, y = (i / w) | 0;
-      for (const q of [x > 0 ? i - 1 : -1, x < w - 1 ? i + 1 : -1, y > 0 ? i - w : -1, y < h - 1 ? i + w : -1]) if (q >= 0 && !seen[q] && on(q)) { seen[q] = 1; st.push(q); } }
-  }
-  return { coverage: cov / (w * h), pieces };
-};
-{
-  const w = 80, h = 80, res = {};
-  for (const [name, pr] of Object.entries(TU.PRESETS)) {
-    const sim = TU.createSim({ w, h, dark: flat(w, h), F: pr.F, k: pr.k, influence: 0, seed: 1, backend: "cpu" });
-    sim.step(4000);
-    res[name] = measure(sim.read(), w, h);
-  }
-  const fmt = (r) => `${Math.round(r.coverage * 100)}% / ${r.pieces}`;
-  // spots: many separate dots about 16 cells apart (80 × 80 cells → roughly 25)
-  ok(res.spots.pieces >= 12 && res.spots.pieces <= 45 && res.spots.coverage < 0.35, `turing spots: ${fmt(res.spots)} (coverage / pieces)`);
-  ok(res.maze.coverage > 0.3 && res.maze.coverage < 0.7 && res.maze.pieces < 15, `turing maze: ${fmt(res.maze)}`);
-  ok(res.coral.coverage > 0.3 && res.coral.coverage < 0.7, `turing coral: ${fmt(res.coral)}`);
-  ok(res.stripes.coverage > 0.25 && res.stripes.coverage < 0.6 && res.stripes.pieces > res.maze.pieces, `turing stripes: ${fmt(res.stripes)}`);
-
-  // the image steers it: left half dark, right half light, full influence
-  const dark = new Float32Array(w * h).map((_, i) => (i % w < w / 2 ? 0.9 : 0.1));
-  const sim = TU.createSim({ w, h, dark, F: TU.PRESETS.maze.F, k: TU.PRESETS.maze.k, influence: 1, seed: 1, backend: "cpu" });
-  sim.step(4000);
-  const V = sim.read(); let top = 1e-4; for (const v of V) top = Math.max(top, v);
-  let L = 0, R = 0; for (let i = 0; i < w * h; i++) if (V[i] / top > 0.5) (i % w < w / 2 ? L++ : R++);
-  ok(L > R * 1.5, `turing image influence: dark half ${Math.round((L / (w * h / 2)) * 100)}% printed, light half ${Math.round((R / (w * h / 2)) * 100)}%`);
-
-  // same seed → same pattern; another seed → another pattern
-  const run = (seed) => { const s = TU.createSim({ w: 40, h: 40, dark: flat(40, 40), F: 0.029, k: 0.057, influence: 0, seed, backend: "cpu" }); s.step(800); return s.read(); };
-  const a = run(5), b = run(5), c = run(6);
-  ok(a.every((v, i) => v === b[i]) && a.some((v, i) => v !== c[i]), "turing random seed: repeatable, and changes the pattern");
-}
-
-// The pipeline used by the rest of the tests: synthetic leaf → tones → Turing
-// (maze, 6 mm) → 2 height levels → printability filter.
+// The levels used by the stitch and G-code tests: synthetic leaf → image trace
+// (2 grays) → printability filter.
 const t0 = Date.now();
-const sg = TU.gridFor(60, 40, 6);
-const smp = TU.sample(base.gray, base.alpha, grid.w, grid.h, sg.w, sg.h);
-const tsim = TU.createSim({ w: sg.w, h: sg.h, dark: smp.dark, ok: smp.ok, F: TU.PRESETS.maze.F, k: TU.PRESETS.maze.k, influence: 0.6, seed: 2, backend: "cpu" });
-tsim.step(3000);
-const V = tsim.read();
-const raw = TU.toLevels(V, sg.w, sg.h, grid.w, grid.h, { levels: 2, invert: false }, base.alpha);
-const rawCounts = DH.raster.levelStats(raw, 2);
-const inv = TU.toLevels(V, sg.w, sg.h, grid.w, grid.h, { levels: 1, invert: true }, base.alpha);
-const invCount = DH.raster.levelStats(inv, 1)[1];
-ok(rawCounts[1] > 0 && rawCounts[2] > 0, `turing posterized into 2 levels: ${JSON.stringify(rawCounts)} (${sg.w}×${sg.h} cells, ${Date.now() - t0} ms)`);
-ok(invCount > 0 && Math.abs(invCount - rawCounts[0]) < grid.w * grid.h * 0.05, `turing invert prints the gaps: ${invCount} vs ${rawCounts[0]} pixels`);
-const filt = DH.printability.filter(raw, grid.w, grid.h, 2, grid.p, { minWidthMm: 0.5, minAreaMm2: 0.5 });
+const traced = DH.trace.traceMap(base, { mode: "gray", colours: 2, paths: 70, corners: 60, noiseMm: 0.8, ignoreWhite: true, darkHigh: true, alphaMask: true }, grid.p);
+const filt = DH.printability.filter(traced.lv, grid.w, grid.h, 2, grid.p, { minWidthMm: 0.5, minAreaMm2: 0.5 });
 const lv = filt.lv;
 const counts = DH.raster.levelStats(lv, 2);
 ok(counts[1] > 0 && counts[2] > 0, "two levels present after the printability filter " + JSON.stringify(counts));
+ok(lv[10 * grid.w + 10] === 0, "speck removed by noise");
+
+// ---- Halftone: dots straight from the image
+{
+  const HT = DH.halftone, p = 0.1, w = 400, h = 200;           // 40 × 20 mm
+  // tone: a left-to-right ramp from black (0) to white (1)
+  const ramp = new Float32Array(w * h).map((_, i) => (i % w) / (w - 1));
+  const flat = (v) => new Float32Array(w * h).fill(v);
+  const S = { grid: "square", spacing: 2, angle: 0, minD: 0.5, maxD: 1.5, invert: false };
+  const sq = HT.dots(flat(0), null, w, h, p, S), hx = HT.dots(flat(0), null, w, h, p, { ...S, grid: "hex" });
+  ok(Math.abs(sq.length - (40 / 2) * (20 / 2)) <= 30 && hx.length > sq.length * 1.05 && hx.length < sq.length * 1.25 && sq.every((q) => Math.abs(q.d - 1.5) < 1e-9),
+    `halftone grid: square ${sq.length} dots, hexagonal ${hx.length} (about ${(2 / Math.sqrt(3)).toFixed(2)}× denser), black → 1.5 mm`);
+  const r = HT.dots(ramp, null, w, h, p, S);
+  const byX = r.slice().sort((a, b) => a.x - b.x);
+  const grows = byX.every((q, i) => i === 0 || byX[i - 1].x === q.x || byX[i - 1].d >= q.d - 1e-9);
+  const lightEmpty = !r.some((q) => q.x > 36) && r.every((q) => q.d >= 0.5 && q.d <= 1.5);
+  ok(grows && lightEmpty, `halftone sizes follow darkness: ${byX[0].d.toFixed(2)} mm at the dark end down to ${byX[byX.length - 1].d.toFixed(2)} mm, none under 0.5 mm, light end left empty`);
+  const capped = HT.dots(flat(0), null, w, h, p, { ...S, maxD: 3 });
+  const inv = HT.dots(ramp, null, w, h, p, { ...S, invert: true });
+  ok(capped.every((q) => q.d <= HT.MAX_DOT) && inv.length > 0 && Math.min(...inv.map((q) => q.x)) > 3 && Math.max(...inv.map((q) => q.x)) > 36,
+    "halftone: dots never exceed 1.5 mm; invert puts the big dots in the light areas");
+  ok(HT.merges({ spacing: 1.2, maxD: 1.5 }) && !HT.merges({ spacing: 2, maxD: 1.5 }), "halftone: spacing under the largest dot is flagged as merging");
+  const rot = HT.dots(flat(0), null, w, h, p, { ...S, angle: 45 });
+  ok(Math.abs(rot.length - sq.length) < sq.length * 0.15, `halftone grid angle 45°: ${rot.length} dots (about the same density)`);
+  const mask = new Uint8Array(w * h).map((_, i) => (i % w < w / 2 ? 1 : 0));
+  const masked = HT.dots(flat(0), mask, w, h, p, S);
+  ok(masked.every((q) => q.x <= 21) && masked.length > 0, "halftone: transparent areas get no dots");
+  const f = HT.filter(r, 0.9);
+  ok(f.dots.every((q) => q.d >= 0.9) && f.removed.every((q) => q.d < 0.9) && f.dots.length + f.removed.length === r.length && f.removed.length > 0,
+    `printability for dots: ${f.removed.length} dots under 0.9 mm removed (shown red), ${f.dots.length} kept`);
+
+  // nearest-neighbour order: every dot once, much shorter travel than random order
+  const placed = r.map((q) => ({ pts: [[q.x + 100, q.y + 100]], type: "Dot", d: q.d }));
+  const shuffled = placed.slice().sort((a, b) => ((a.pts[0][0] * 7919 + a.pts[0][1] * 104729) % 97) - ((b.pts[0][0] * 7919 + b.pts[0][1] * 104729) % 97));
+  const ord = DH.gcode.orderDots(shuffled, [100, 100]);
+  const travel = (L) => L.reduce((a, q, i) => a + (i ? Math.hypot(q.pts[0][0] - L[i - 1].pts[0][0], q.pts[0][1] - L[i - 1].pts[0][1]) : 0), 0);
+  const seen = new Set(ord.map((q) => q.pts[0].join(",")));
+  // on a 2 mm grid no order can travel less than about 2 mm per dot
+  const floor = (ord.length - 1) * 2;
+  ok(ord.length === shuffled.length && seen.size === shuffled.length && travel(ord) <= floor * 1.25 && travel(ord) < travel(shuffled) / 3,
+    `halftone nearest-neighbour order: ${ord.length} dots, travel ${Math.round(travel(ord))} mm (minimum about ${floor} mm; ${Math.round(travel(shuffled))} mm unordered)`);
+}
 
 // Image trace (the other image treatment) on the same synthetic image, then
 // through the same printability filter.
@@ -273,6 +261,29 @@ for (const pr of DH.PRINTERS) {
   const perLayer = (r.text.match(/^M201 N1 Y(\d+)/gm) || []).length;
   ok(a2l && a2l.bed[0] === 330 && a2l.bed[1] === 320 && lim(a2l, 0) === 8000 && lim(a2l, 1000) === Math.round(29e6 / 3700) && perLayer === r.stats.layers,
     `A2L: 330 × 320 mm bed, Y acceleration 8000 empty and ${lim(a2l, 1000)} with 1 kg printed, limit written on all ${perLayer} layers`);
+}
+
+// Halftone dots in G-code: stationary, rising while extruding, retract + lift
+// between dots, extrusion scaled to size (and to the size correction).
+{
+  const dot = { h: 0.6, flow: 1.2, dwell: 0.3, retract: 1.2, lift: 2, correction: 1 };
+  const mk = (d, corr) => [[100, 100], [104, 100], [108, 100]].map((q, i) => ({ pts: [q], type: "Dot", d: i === 1 ? d : 1, dot: { ...dot, correction: corr } }));
+  const build = (paths) => DH.gcode.build({ name: "ht", printer: DH.PRINTERS[1], material: mat, print: { ...print, firstLayerFlow: 1 }, layers: [{ colour: 0, paths }], colours: [{ name: "a" }] });
+  const body = (r) => r.text.split("; MACHINE_START_GCODE_END")[1].split("; MACHINE_END_GCODE_START")[0];
+  const pushes = (r) => [...body(r).matchAll(/^G1 Z[\d.]+ E([\d.]+) F/gm)].map((m) => +m[1]);
+  const r1 = build(mk(1.0, 1)), r2 = build(mk(1.5, 1)), rc = build(mk(1.0, 1.2));
+  const b1 = body(r1).split("\n");
+  const moving = b1.filter((l) => /^G1 X[^E]* E[\d.]/.test(l)).length;
+  let between = 0;
+  for (let i = 0; i < b1.length; i++) if (/^G1 Z[\d.]+ E/.test(b1[i]) && /^G4/.test(b1[i + 1]) && /^G1 E-/.test(b1[i + 2]) && /^G1 Z/.test(b1[i + 3])) between++;
+  const e = pushes(r1), e2 = pushes(r2), ec = pushes(rc);
+  ok(moving === 0 && between === 3 && Math.abs(e2[1] / e[1] - 2.25) < 0.01 && Math.abs(ec[1] / e[1] - 1.44) < 0.01,
+    `halftone g-code: no moving extrusion, every dot pushed while rising then retract + lift; 1.5 mm dot gets ${(e2[1] / e[1]).toFixed(2)}× the 1 mm dot, correction 1.2 gives ${(ec[1] / e[1]).toFixed(2)}×`);
+  const row = DH.halftone.calibration(0.5, 1.5, 128, 128, 10);
+  const rr = build(row.map((c) => ({ pts: [[c.x, c.y]], type: "Dot", d: c.d, dot, keepOrder: true })));
+  const ce = pushes(rr);
+  ok(row.length === 10 && Math.abs(row[0].d - 0.5) < 1e-9 && Math.abs(row[9].d - 1.5) < 1e-9 && ce.length === 10 && ce.every((v, i) => i === 0 || v > ce[i - 1]),
+    `dot calibration: 10 dots ${row.map((c) => c.d.toFixed(2)).join(" ")} mm, extrusion rising ${ce[0]} → ${ce[9]}`);
 }
 
 const sq = DH.gcode.build({ name: "square", printer: DH.PRINTERS[0], material: mat, print, layers: DH.gcode.testSquare(DH.PRINTERS[0], print), colours: [{ name: "a" }] });

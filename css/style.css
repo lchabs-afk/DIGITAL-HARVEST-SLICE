@@ -159,7 +159,7 @@ input[type="checkbox"]:checked::after { left: 18px; background: var(--ink); }
 .field.wide .seg button { height: 34px; padding: 0 12px; }
 .seg button[aria-pressed="true"] { background: var(--solid); border-color: var(--solid); color: var(--paper); }
 
-/* Turing / image trace switch: stacked full-width boxes, the active one filled */
+/* Halftone / image trace switch: stacked full-width boxes, the active one filled */
 .mode-switch { display: grid; gap: 10px; margin-top: 14px; }
 .mode-switch button {
   height: 40px; border: 1px solid var(--ink); border-radius: 3px; background: transparent; cursor: pointer;
@@ -170,12 +170,10 @@ input[type="checkbox"]:checked::after { left: 18px; background: var(--ink); }
 .traced-swatches span { display: inline-flex; align-items: center; gap: 6px; }
 .traced-swatches i { width: 18px; height: 18px; border: 1px solid var(--ink); border-radius: 3px; display: inline-block; }
 
-/* Turing run controls and the advanced section */
-.sim-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 14px; }
-.sim-status { font-size: 11.5px; color: var(--muted); }
-.advanced { margin-top: 14px; border-top: 1px solid var(--rule); padding-top: 10px; }
-.advanced summary { cursor: pointer; font-size: 12px; text-transform: lowercase; color: var(--muted); }
-.advanced[open] summary { color: var(--ink); }
+/* Dot calibration calculator */
+.calib-calc { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 12px; font-size: 12px; }
+.calib-calc label { text-transform: lowercase; color: var(--muted); }
+.calib-calc select { height: 26px; padding: 0 6px; border: 1px solid var(--ink); border-radius: 3px; background: var(--field); }
 
 /* Buttons: outlined boxes; the main action is filled */
 .btn {

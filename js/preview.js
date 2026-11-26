@@ -182,5 +182,40 @@
     g.fill();
   }
 
-  DH.preview = { fitImage, levelCanvas, toolpaths, growth, layerHue };
+  // Halftone dots at their real size on a canvas of the design (wMm × hMm),
+  // with dots the printability filter removed drawn in red.
+  function dotsCanvas(dots, removed, wMm, hMm, colour) {
+    const k = Math.min(2400 / Math.max(wMm, hMm), 20); // pixels per mm
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(wMm * k)); c.height = Math.max(1, Math.round(hMm * k));
+    const g = c.getContext("2d");
+    const draw = (list, fill) => {
+      g.fillStyle = fill; g.beginPath();
+      for (const q of list) { const r = Math.max(0.5, (q.d / 2) * k); g.moveTo(q.x * k + r, (hMm - q.y) * k); g.arc(q.x * k, (hMm - q.y) * k, r, 0, Math.PI * 2); }
+      g.fill();
+    };
+    draw(dots, colour);
+    draw(removed || [], "#d62828");
+    return c;
+  }
+
+  // The dot calibration row on the bed: real-size dots, each numbered with its
+  // intended diameter underneath.
+  function calibration(canvas, o) {
+    const v = toolpaths(canvas, { bed: o.bed, exclude: o.exclude, frame: o.frame, box: null, fit: o.box, layers: [], current: 0, lineWidth: 0.4 });
+    const { g, X, Y, s, dpr } = v;
+    const ink = css("--ink") || "#1d1d1c";
+    g.fillStyle = o.colour;
+    for (const c of o.row) { g.beginPath(); g.arc(X(c.x), Y(c.y), Math.max(1, (c.d / 2) * s), 0, Math.PI * 2); g.fill(); }
+    g.fillStyle = ink; g.textAlign = "center"; g.textBaseline = "top";
+    const fs = Math.max(10 * dpr, Math.min(16 * dpr, s * 1.1));
+    for (const c of o.row) {
+      g.font = `500 ${fs}px Haskoy, system-ui, sans-serif`;
+      g.fillText(String(c.n), X(c.x), Y(c.y) + Math.max(8 * dpr, 1.6 * s));
+      g.font = `400 ${fs * 0.8}px Haskoy, system-ui, sans-serif`;
+      g.fillText(c.d.toFixed(2), X(c.x), Y(c.y) + Math.max(8 * dpr, 1.6 * s) + fs * 1.2);
+    }
+  }
+
+  DH.preview = { fitImage, levelCanvas, toolpaths, dotsCanvas, calibration, growth, layerHue };
 })(globalThis.DH = globalThis.DH || {});

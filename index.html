@@ -5,7 +5,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Digital Harvest Stitch</title>
-<meta name="description" content="Turn a pressed UV texture into Turing patterns or traced shapes and embroidery-style G-code for printing on textile with Bambu Lab printers.">
+<meta name="description" content="Turn a pressed UV texture into halftone dots or traced shapes and embroidery-style G-code for printing on textile with Bambu Lab printers.">
 <link rel="preload" href="fonts/Haskoy-variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/style.css">
 </head>
@@ -37,24 +37,30 @@
       <div class="fields" id="f-import"></div>
     </section>
 
-    <section class="panel" id="p-turing">
+    <section class="panel" id="p-treat">
       <h2><span class="num">02</span> Image treatment</h2>
       <div class="mode-switch" id="treatMode" role="group" aria-label="Image treatment">
-        <button type="button" data-mode="turing">turing pattern</button>
+        <button type="button" data-mode="halftone">halftone</button>
         <button type="button" data-mode="trace">image trace</button>
       </div>
-      <div id="turingBox">
-      <p class="hint">A reaction-diffusion simulation grows spots, stripes or mazes across the design, steered by the plant's tones. Inspired by Ivan Murit's TexTuring.</p>
-      <div class="fields" id="f-turing"></div>
-      <div class="sim-controls">
-        <button class="btn small" id="simPause" type="button">pause</button>
-        <button class="btn small ghost" id="simRestart" type="button">restart</button>
-        <span class="sim-status" id="simStatus" aria-live="polite"></span>
-      </div>
-      <details class="advanced">
-        <summary>advanced</summary>
-        <div class="fields" id="f-turing-adv"></div>
-      </details>
+      <div id="halftoneBox">
+        <p class="hint">Samples the image on a grid; each cell becomes a dot whose size follows the darkness there. Dots are printed directly, with no outlines or stitches.</p>
+        <div class="fields" id="f-halftone"></div>
+        <h3>Dot printing</h3>
+        <div class="fields" id="f-dotprint"></div>
+        <h3>Dot calibration</h3>
+        <p class="hint">Print a row of 10 dots from the minimum to the maximum size (numbered in the preview), measure them, and enter one measurement below to set the size correction.</p>
+        <div class="row-btns">
+          <button class="btn small" id="exportCalib" type="button">export dot calibration</button>
+          <button class="btn small ghost" id="showCalib" type="button">show in preview</button>
+        </div>
+        <div class="calib-calc">
+          <label for="calibDot">dot</label>
+          <select id="calibDot"></select>
+          <label for="calibMeasured">measured</label>
+          <span class="num-in"><input type="number" id="calibMeasured" min="0.05" max="10" step="0.01" placeholder="–"><span class="unit">mm</span></span>
+          <button class="btn small" id="calibApply" type="button">set correction</button>
+        </div>
       </div>
       <div id="traceBox" hidden>
         <p class="hint">Like Illustrator's Image Trace: groups the picture into a few flat tones or colours with crisp edges. Each one becomes a height level.</p>
@@ -76,6 +82,7 @@
       <div class="fields" id="f-stitch-mode"></div>
       <div class="tabs level-tabs" id="levelTabs" role="tablist"></div>
       <div class="fields" id="f-stitch"></div>
+      <p class="hint" id="stitchNote" hidden>Halftone prints its dots directly, so stitch patterns don't apply. The print settings below still do.</p>
       <h3>Print</h3>
       <div class="fields" id="f-print"></div>
     </section>
@@ -108,7 +115,8 @@
         <h2><span class="num">05</span> Preview &amp; export</h2>
         <div class="tabs" id="viewTabs" role="tablist">
           <button type="button" role="tab" data-view="original">Original</button>
-          <button type="button" role="tab" data-view="turing">turing</button>
+          <button type="button" role="tab" data-view="treat">halftone</button>
+          <button type="button" role="tab" data-view="calibration" hidden>calibration</button>
           <button type="button" role="tab" data-view="paths" aria-selected="true">Toolpaths</button>
         </div>
       </div>
@@ -168,7 +176,7 @@
 <script src="js/template.js"></script>
 <script src="js/geometry.js"></script>
 <script src="js/raster.js"></script>
-<script src="js/turing.js"></script>
+<script src="js/halftone.js"></script>
 <script src="js/trace.js"></script>
 <script src="js/printability.js"></script>
 <script src="js/coral.js"></script>

@@ -11,9 +11,11 @@
   const DEFAULTS = {
     import: { widthMm: 80, offX: 0, offY: 0, mirror: false },
     tone: { black: 0, white: 255, gamma: 1, contrast: 0 },
-    treatment: "turing", // or "trace"
+    treatment: "halftone", // or "trace"
     trace: { mode: "colour", threshold: 128, colours: 3, paths: 60, corners: 50, noiseMm: 0.5, ignoreWhite: true, darkHigh: true },
-    turing: { preset: "maze", F: 0.029, k: 0.057, scaleMm: 3, influence: 0.6, iterations: 5000, seed: 1, invert: false, levels: 2 },
+    halftone: { grid: "square", spacing: 2, angle: 45, minD: 0.5, maxD: 1.5, invert: false },
+    // how halftone dots are printed; correction comes from the dot calibration
+    dotprint: { height: 0.6, flow: 1.2, dwell: 0.3, retract: 1.2, lift: 2, correction: 1 },
     printable: { minWidthMm: 0.5, minAreaMm2: 0.5, simplify: 0.03, alphaMask: true },
     machine: { printer: "a1mini", nozzle: 0.4, bedType: "Textured PEI Plate", skipLeveling: true },
     material: Object.assign({}, DH.MATERIALS[0]),
@@ -50,7 +52,15 @@
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } },
   };
 
-  let state = merge(clone(DEFAULTS), store.get("dh.state") || {});
+  // Values a stored state or preset may hold that no longer exist (e.g. the
+  // removed Turing treatment) fall back to the defaults.
+  function normalize(st) {
+    if (!["halftone", "trace"].includes(st.treatment)) st.treatment = DEFAULTS.treatment;
+    st.halftone.maxD = Math.min(DH.halftone.MAX_DOT, st.halftone.maxD);
+    st.halftone.minD = Math.min(st.halftone.maxD, st.halftone.minD);
+    return st;
+  }
+  let state = normalize(merge(clone(DEFAULTS), store.get("dh.state") || {}));
   let customMaterials = store.get("dh.materials") || [];
   let levelTab = 0, view = "paths";
 
@@ -60,10 +70,10 @@
     ks.reduce((o, k) => o[k], state)[last] = v;
   }
   const printer = () => DH.PRINTERS.find((p) => p.id === state.machine.printer) || DH.PRINTERS[0];
-  // Number of height levels the Turing pattern is posterized into.
+  // Number of height levels: one per traced tone; halftone dots are one level.
   const levelCount = () => (state.treatment === "trace"
     ? (state.trace.mode === "bw" ? 1 : Math.max(1, Math.min(5, state.trace.colours)))
-    : Math.max(1, Math.min(5, state.turing.levels)));
+    : 1);
 
   // Optional frame on the plate, centred on the bed. Returns rectangles
   // [x0, y0, x1, y1] in bed mm: the outer edge, the inner edge, and the safe
@@ -95,10 +105,10 @@
   }
 
   // ---------------------------------------------------------------- field builder
-  // size: new working grid; turing: restart the simulation; levels: re-posterize
-  // and re-filter the finished pattern (no new simulation); paths / gcode: rebuild.
-  // treat: redo the image treatment in use (Turing or trace); trace: re-trace.
-  const NEXT = { size: onSize, treat: onTreat, turing: onTuring, trace: onTrace, levels: onLevels, paths: onPaths, gcode: onGcode, none: () => {} };
+  // size: new working grid; halftone / trace: redo that treatment; levels:
+  // re-apply the printability filter; paths / gcode: rebuild.
+  // treat: redo the image treatment in use (halftone or trace).
+  const NEXT = { size: onSize, treat: onTreat, halftone: onHalftone, trace: onTrace, levels: onLevels, paths: onPaths, gcode: onGcode, none: () => {} };
 
   // Slider end labels in the [04] [07] [10] style.
   function tickLabel(v, step) {
@@ -199,49 +209,78 @@
     renderColours(); renderStitch();
   }
 
-  // Panel 02: the Turing pattern, the image adjustments that steer it, and
-  // the printability filter applied to the result.
-  function renderTuring() {
-    const t = state.turing, presets = DH.turing.PRESETS;
-    fill("f-turing", [
-      { path: "turing.preset", label: "Pattern", type: "seg", wide: true, options: Object.entries(presets).map(([k, v]) => [k, v.label.toLowerCase()]), on: "turing",
-        after: (v) => { t.F = presets[v].F; t.k = presets[v].k; renderTuring(); } },
-      { path: "turing.scaleMm", label: "Pattern scale", type: "range", min: 0.5, max: 20, step: 0.1, unit: "mm", on: "turing",
-        help: "Distance between neighbouring spots or stripes. About 4–8× the line width prints well." },
-      { path: "turing.influence", label: "Image influence", type: "range", min: 0, max: 1, step: 0.01, unit: "", on: "turing",
-        help: "How strongly the plant's tones steer the pattern. 0 ignores the image; at 1, light areas thin out to bare fabric and dark areas fill in." },
-      { path: "turing.iterations", label: "Iterations", type: "range", min: 200, max: 20000, step: 100, unit: "", on: "turing",
-        help: "How long the pattern grows. It settles after a few thousand." },
-      { path: "turing.seed", label: "Random seed", type: "range", min: 1, max: 999, step: 1, unit: "", on: "turing" },
-      { path: "turing.levels", label: "Height levels", type: "seg", options: [1, 2, 3, 4, 5].map((n) => [n, String(n)]), on: "levels", after: levelsChanged,
-        help: "The pattern's concentration is posterized into this many heights: the cores of spots and stripes stand tallest." },
-      { path: "turing.invert", label: "Invert (print the gaps)", type: "check", on: "levels" },
+  // Panel 02, halftone: grid, dot sizes, how dots are printed, calibration.
+  function renderHalftone() {
+    const h = state.halftone;
+    fill("f-halftone", [
+      { path: "halftone.grid", label: "Grid", type: "seg", wide: true, options: [["square", "square"], ["hex", "hexagonal"]], on: "halftone" },
+      { path: "halftone.spacing", label: "Grid spacing", type: "range", min: 0.5, max: 10, step: 0.1, unit: "mm", on: "halftone", after: updateMergeHint },
+      { path: "halftone.angle", label: "Grid angle", type: "range", min: -90, max: 90, step: 1, unit: "°", on: "halftone" },
+      { path: "halftone.minD", label: "Minimum dot diameter", type: "range", min: 0, max: DH.halftone.MAX_DOT, step: 0.05, unit: "mm", on: "halftone",
+        after: renderCalibDots, help: "Smaller dots are dropped, so light areas stay bare fabric." },
+      { path: "halftone.maxD", label: "Maximum dot diameter", type: "range", min: 0.1, max: DH.halftone.MAX_DOT, step: 0.05, unit: "mm", on: "halftone",
+        after: () => { updateMergeHint(); renderCalibDots(); }, help: `The darkest areas get this size. ${DH.halftone.MAX_DOT} mm at most.` },
+      { path: "halftone.invert", label: "Invert (light areas get the big dots)", type: "check", on: "halftone" },
     ]);
-    // the preset buttons show no selection once feed / kill are set by hand
-    const custom = !Object.entries(presets).some(([k, v]) => k === t.preset && v.F === t.F && v.k === t.k);
-    if (custom) $("f-turing").querySelectorAll(".seg button").forEach((b, i) => { if (i < 4) b.setAttribute("aria-pressed", "false"); });
-    fill("f-turing-adv", [
-      { path: "turing.F", label: "Feed (F)", type: "range", min: 0.01, max: 0.1, step: 0.0005, unit: "", on: "turing", after: () => renderTuring() },
-      { path: "turing.k", label: "Kill (k)", type: "range", min: 0.04, max: 0.075, step: 0.0005, unit: "", on: "turing", after: () => renderTuring(),
-        help: "The presets set these. Small changes move between spots, stripes, mazes and coral; far from them the pattern can die out or fill everything." },
+    const warn = document.createElement("p");
+    warn.className = "hint merge-hint"; warn.id = "mergeHint";
+    $("f-halftone").appendChild(warn);
+    updateMergeHint();
+    fill("f-dotprint", [
+      { path: "dotprint.height", label: "Z rise while extruding", type: "range", min: 0.1, max: 2, step: 0.05, unit: "mm", on: "paths",
+        help: "The nozzle rises this much while pushing a dot, so it doesn't sink into the blob. Dots on later layers sit on top." },
+      { path: "dotprint.flow", label: "Dot flow", type: "range", min: 0.5, max: 3, step: 0.05, unit: "×", on: "paths", help: "Extra plastic per dot; fabric soaks some up." },
+      { path: "dotprint.correction", label: "Size correction", type: "range", min: 0.5, max: 2, step: 0.01, unit: "×", on: "paths",
+        help: "From the dot calibration: intended ÷ measured diameter. Scales the size each dot is extruded for." },
+      { path: "dotprint.dwell", label: "Pause after each dot", type: "range", min: 0, max: 2, step: 0.05, unit: "s", on: "paths" },
+      { path: "dotprint.retract", label: "Retraction after each dot", type: "range", min: 0, max: 4, step: 0.05, unit: "mm", on: "paths" },
+      { path: "dotprint.lift", label: "Lift between dots", type: "range", min: 0.4, max: 10, step: 0.1, unit: "mm", on: "paths" },
     ]);
+    renderCalibDots();
+  }
+  function updateMergeHint() {
+    const el = $("mergeHint"), h = state.halftone;
+    if (!el) return;
+    el.hidden = !DH.halftone.merges(h);
+    el.textContent = `Grid spacing (${h.spacing} mm) is smaller than the largest dot (${Math.min(DH.halftone.MAX_DOT, h.maxD)} mm): dark dots will merge.`;
+  }
+  const calibRow = () => {
+    const pr = printer();
+    return DH.halftone.calibration(state.halftone.minD, state.halftone.maxD, pr.bed[0] / 2, pr.bed[1] / 2, 10);
+  };
+  function renderCalibDots() {
+    const sel = $("calibDot"), keep = sel.value;
+    sel.innerHTML = "";
+    for (const c of calibRow()) {
+      const o = document.createElement("option");
+      o.value = c.n; o.textContent = `${c.n} · ${c.d.toFixed(2)} mm`;
+      sel.appendChild(o);
+    }
+    if (keep) sel.value = keep;
+  }
+
+  // Image adjustments and the printability filter, shared by both treatments.
+  function renderShared() {
+    const half = state.treatment === "halftone";
     fill("f-tone", [
       { path: "tone.black", label: "Levels: black point", type: "range", min: 0, max: 254, step: 1, unit: "", on: "treat" },
       { path: "tone.white", label: "Levels: white point", type: "range", min: 1, max: 255, step: 1, unit: "", on: "treat" },
       { path: "tone.gamma", label: "Levels: midtones (gamma)", type: "range", min: 0.2, max: 4, step: 0.05, unit: "", on: "treat" },
       { path: "tone.contrast", label: "Contrast", type: "range", min: -90, max: 90, step: 1, unit: "", on: "treat" },
     ]);
-    fill("f-printable", [
+    fill("f-printable", half ? [
+      { path: "printable.minWidthMm", label: "Smallest printable dot", type: "range", min: 0, max: 1.5, step: 0.05, unit: "mm", on: "levels",
+        help: "Dots smaller than this can't be printed reliably and are removed. Shown in red on the halftone tab." },
+      { path: "printable.alphaMask", label: "Never print transparent pixels", type: "check", on: "treat" },
+    ] : [
       { path: "printable.minWidthMm", label: "Minimum feature width", type: "range", min: 0, max: 3, step: 0.05, unit: "mm", on: "levels",
-        help: "Removes parts narrower than this. Shown in red on the turing / trace tab." },
+        help: "Removes parts narrower than this. Shown in red on the trace tab." },
       { path: "printable.minAreaMm2", label: "Minimum island and hole area", type: "range", min: 0, max: 20, step: 0.1, unit: "mm²", on: "levels" },
-      // image trace has its own "paths" setting for this
-      ...(state.treatment === "trace" ? [] : [{ path: "printable.simplify", label: "Path simplification", type: "range", min: 0, max: 0.3, step: 0.01, unit: "mm", on: "paths" }]),
       { path: "printable.alphaMask", label: "Never print transparent pixels", type: "check", on: "treat" },
     ]);
   }
 
-  // Panel 02 switch: Turing pattern or image trace.
+  // Panel 02 switch: halftone or image trace.
   function renderTreatment() {
     const trace = state.treatment === "trace";
     $("treatMode").querySelectorAll("button").forEach((b) => {
@@ -249,13 +288,21 @@
       b.onclick = () => {
         if (state.treatment === b.dataset.mode) return;
         state.treatment = b.dataset.mode;
+        if (view === "calibration") view = "treat";
         renderTreatment(); levelsChanged(); onTreat(); save();
       };
     });
-    $("turingBox").hidden = trace;
+    $("halftoneBox").hidden = trace;
     $("traceBox").hidden = !trace;
-    $("viewTabs").querySelector('[data-view="turing"]').textContent = trace ? "trace" : "turing";
-    renderTuring();
+    $("viewTabs").querySelector('[data-view="treat"]').textContent = trace ? "trace" : "halftone";
+    $("viewTabs").querySelector('[data-view="calibration"]').hidden = trace;
+    // halftone prints dots directly: no stitch patterns
+    $("stitchNote").hidden = trace;
+    ["f-stitch-mode", "f-stitch"].forEach((id) => { $(id).hidden = !trace; });
+    if (!trace) $("levelTabs").hidden = true;
+    $("viewTabs").querySelectorAll("button").forEach((x) => x.setAttribute("aria-selected", String(x.dataset.view === view)));
+    renderHalftone();
+    renderShared();
     renderTrace();
   }
 
@@ -417,7 +464,7 @@
   function renderStitchTabs() {
     const tabs = $("levelTabs");
     tabs.innerHTML = "";
-    tabs.hidden = state.stitchSame || levelCount() < 2;
+    tabs.hidden = state.stitchSame || levelCount() < 2 || state.treatment === "halftone";
     if (tabs.hidden) return;
     for (let k = 0; k < levelCount(); k++) {
       const b = document.createElement("button");
@@ -570,19 +617,27 @@
   }
 
   // Redo whichever image treatment is selected.
-  function onTreat() { if (state.treatment === "trace") onTrace(); else onTuring(); }
-  function stopSim() {
-    simToken++;
-    if (sim) { sim.destroy(); sim = null; }
-    simV = null; simPaused = false;
-    updateSimControls();
+  function onTreat() { if (state.treatment === "trace") onTrace(); else onHalftone(); }
+
+  // ---- halftone: dots straight from the image, no vectorizing
+  let tone = null, removed = null, hdots = null, hremoved = [];
+  function onHalftone() {
+    if (state.treatment !== "halftone" || !base) return;
+    tone = toneMap();
+    const all = DH.halftone.dots(tone, state.printable.alphaMask ? base.alpha : null, grid.w, grid.h, grid.p, state.halftone);
+    const f = DH.halftone.filter(all, state.printable.minWidthMm);
+    hdots = f.dots; hremoved = f.removed;
+    lv = null; presentLevels = hdots.length ? 1 : 0;
+    lvCanvas = null;
+    onPaths();
+    if (view === "treat") redraw();
   }
 
   // ---- image trace: quick, so it simply reruns on every change
   let traceRaf = 0;
   function onTrace() {
     if (state.treatment !== "trace") return;
-    stopSim();
+    hdots = null;
     cancelAnimationFrame(traceRaf);
     traceRaf = requestAnimationFrame(() => {
       if (!base) return;
@@ -594,86 +649,9 @@
     });
   }
 
-  // ---- the Turing simulation: runs in animation frames, live preview, pausable
-  let sim = null, simGrid = null, simV = null, simPaused = false, simToken = 0, tone = null, removed = null;
-  function onTuring() {
-    if (state.treatment !== "turing") return;
-    simToken++;
-    if (sim) { sim.destroy(); sim = null; }
-    simV = null; simPaused = false;
-    lv = null; result = null; presentLevels = 0;
-    if (!base) { updateSimControls(); return; }
-    tone = toneMap();
-    const t = state.turing;
-    simGrid = DH.turing.gridFor(state.import.widthMm, heightMm(), t.scaleMm, DH.turing.gpuAvailable() ? 600000 : 60000);
-    const s = DH.turing.sample(tone, state.printable.alphaMask ? base.alpha : null, grid.w, grid.h, simGrid.w, simGrid.h);
-    sim = DH.turing.createSim({ w: simGrid.w, h: simGrid.h, dark: s.dark, ok: s.ok, F: t.F, k: t.k, influence: t.influence, seed: t.seed });
-    runSim(simToken);
-  }
-  function runSim(token) {
-    let chunk = sim.backend === "webgl" ? 40 : 2, frames = 0;
-    const frame = () => {
-      if (token !== simToken || !sim) return;
-      if (!simPaused) {
-        const t0 = performance.now();
-        sim.step(Math.min(chunk, state.turing.iterations - sim.iteration));
-        const dt = performance.now() - t0;
-        chunk = Math.max(1, Math.min(400, Math.round(chunk * (dt > 0 ? 14 / dt : 2)))); // aim for ~14 ms per frame
-        if (frames++ % 2 === 0 || sim.iteration >= state.turing.iterations) drawSim(sim.read());
-      }
-      updateSimControls();
-      if (sim.iteration >= state.turing.iterations) { finishSim(); return; }
-      requestAnimationFrame(frame);
-    };
-    updateSimControls();
-    requestAnimationFrame(frame);
-  }
-  function finishSim() {
-    simV = sim.read();
-    updateSimControls();
-    onLevels();
-  }
-  function pauseSim() {
-    if (!sim || sim.iteration >= state.turing.iterations) return;
-    simPaused = !simPaused;
-    // pausing builds the toolpaths from the pattern as it is now
-    if (simPaused) { simV = sim.read(); onLevels(); }
-    updateSimControls();
-  }
-  function updateSimControls() {
-    const running = sim && sim.iteration < state.turing.iterations;
-    $("simPause").disabled = !running;
-    $("simPause").textContent = simPaused ? "resume" : "pause";
-    $("simRestart").disabled = !base;
-    $("simStatus").textContent = !sim ? "" : `[ ${sim.iteration.toLocaleString("en")} / ${state.turing.iterations.toLocaleString("en")} · ${sim.backend === "webgl" ? "gpu" : "cpu"}${simPaused ? " · paused" : running ? "" : " · done"} ]`;
-  }
-  // live view of the concentration while it grows
-  function drawSim(V) {
-    if (view === "original" || !simGrid) return;
-    const { w, h } = simGrid, c = document.createElement("canvas");
-    c.width = w; c.height = h;
-    const g = c.getContext("2d"), img = g.createImageData(w, h);
-    let top = 1e-4;
-    for (let i = 0; i < V.length; i++) if (V[i] > top) top = V[i];
-    const ink = [29, 29, 28], paper = [227, 227, 224];
-    for (let i = 0; i < V.length; i++) {
-      const a = Math.min(1, V[i] / top);
-      for (let ch = 0; ch < 3; ch++) img.data[i * 4 + ch] = paper[ch] + (ink[ch] - paper[ch]) * a;
-      img.data[i * 4 + 3] = 255;
-    }
-    g.putImageData(img, 0, 0);
-    DH.preview.fitImage($("view"), c, 14);
-  }
-
-  // Finished (or paused) pattern → height levels → printability filter.
-  // With image trace, re-trace instead (it's quick).
-  function onLevels() {
-    if (state.treatment === "trace") { onTrace(); return; }
-    if (!simV || !base) return;
-    const mask = state.printable.alphaMask ? base.alpha : null;
-    applyLevels(DH.turing.toLevels(simV, simGrid.w, simGrid.h, grid.w, grid.h, state.turing, mask));
-  }
-  // Height levels from either treatment → printability filter → toolpaths.
+  // The printability filter changed: redo the treatment (both are quick).
+  function onLevels() { onTreat(); }
+  // Traced height levels → printability filter → toolpaths.
   function applyLevels(raw) {
     const N = levelCount();
     const f = DH.printability.filter(raw, grid.w, grid.h, N, grid.p, state.printable);
@@ -684,7 +662,7 @@
     lvCanvas = null;
     fields = {}; growCache = {};
     onPaths();
-    if (view === "turing") redraw();
+    if (view === "treat") redraw();
   }
   function onPaths() { pathCache = {}; onGcode(); }
   let genTimer = 0;
@@ -722,10 +700,23 @@
     });
   }
 
+  // Halftone dots on the bed, ready for the G-code writer.
+  function halftonePaths() {
+    const pl = placement(), d = state.dotprint;
+    const dot = { h: d.height, flow: d.flow, dwell: d.dwell, retract: d.retract, lift: d.lift, correction: d.correction };
+    return hdots.map((q) => ({ pts: [[pl.x0 + (state.import.mirror ? pl.W - q.x : q.x), pl.y0 + q.y]], closed: false, type: "Dot", d: q.d, dot }));
+  }
+
   async function buildLayers(token) {
     const pl = placement(), s = printSettings();
     const layers = [];
     const L = Math.max(1, Math.round(s.layersPerLevel));
+    if (state.treatment === "halftone") {
+      // the same dots on every layer, so they stack
+      if (!pathCache.halftone) pathCache.halftone = halftonePaths();
+      for (let r = 0; r < L; r++) layers.push({ colour: 0, paths: pathCache.halftone });
+      return layers;
+    }
     for (let k = 1; k <= presentLevels; k++) {
       if (!fields[k]) {
         fields[k] = DH.raster.levelField(lv, grid.w, grid.h, k, grid.p);
@@ -790,7 +781,7 @@
 
   async function generate() {
     const token = ++genToken;
-    if (!lv) return;
+    if (state.treatment === "halftone" ? !hdots : !lv) return;
     $("busy").hidden = false;
     await tick();
     try {
@@ -819,14 +810,26 @@
   }
 
   // ---------------------------------------------------------------- view
+  // The dot calibration row on the bed, numbered, at its real size.
+  function drawCalibration() {
+    const pr = printer(), row = calibRow();
+    const pad = 6, box = [row[0].x - pad, row[0].y - pad, row[row.length - 1].x + pad, row[0].y + pad];
+    DH.preview.calibration($("view"), { bed: pr.bed, exclude: pr.excludeArea, frame: frameGeom(), box, row, colour: state.colours[0].hex });
+  }
+
   function redraw() {
     const canvas = $("view");
     $("pathControls").hidden = view !== "paths";
     $("legend").hidden = view === "original";
     if (!src) { const g = canvas.getContext("2d"); g.clearRect(0, 0, canvas.width, canvas.height); return; }
     if (view === "original") { DH.preview.fitImage(canvas, src, 14); return; }
-    if (sim && !simV) { drawSim(sim.read()); return; } // still growing: show it live
-    if (view === "turing") {
+    if (view === "calibration") { drawCalibration(); return; }
+    if (view === "treat" && state.treatment === "halftone") {
+      if (!hdots) return;
+      DH.preview.fitImage(canvas, DH.preview.dotsCanvas(hdots, hremoved, grid.w * grid.p, grid.h * grid.p, state.colours[0].hex), 14);
+      return;
+    }
+    if (view === "treat") {
       if (!lv) return;
       if (!lvCanvas) lvCanvas = DH.preview.levelCanvas(lv, grid.w, grid.h, state.colours, removed);
       DH.preview.fitImage(canvas, lvCanvas, 14);
@@ -861,7 +864,8 @@
       }
     }
     if (view === "paths" && $("showTravel").checked) add(`<i class="travel"></i>travel (current layer)`);
-    if (view === "turing") add(`<i style="background:repeating-linear-gradient(45deg,#d62828 0 2px,#f5cdcd 2px 4px);height:8px"></i>removed by the printability filter`);
+    if (view === "treat") add(`<i style="background:repeating-linear-gradient(45deg,#d62828 0 2px,#f5cdcd 2px 4px);height:8px"></i>removed by the printability filter`);
+    if (view === "calibration") { el.innerHTML = ""; add("dot calibration: number · intended diameter (printed with size correction 1×)"); }
   }
   const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -925,6 +929,8 @@
     if (fp) add("bad", fp);
     if (state.frame.enabled && !state.frame.pauseToPlace)
       add("", "The printer's start routine (purge line, calibration, leveling) moves low across the plate and could hit magnets that are already on. Lay the fabric and magnets after it, or turn on the pause.");
+    if (state.treatment === "halftone" && DH.halftone.merges(state.halftone))
+      add("", `Grid spacing (${state.halftone.spacing} mm) is smaller than the largest dot (${Math.min(DH.halftone.MAX_DOT, state.halftone.maxD)} mm): dark dots will merge.`);
     if (pr.multiNozzle) add("info", `${pr.name}: dual-nozzle start G-code is filled for one filament on one nozzle. Print the test square before a real job.`);
     if (state.machine.skipLeveling && result && !result.stats.levelingRemoved) add("", "No bed-leveling block was found in this printer's start G-code; nothing was removed.");
   }
@@ -947,12 +953,46 @@
   async function exportGcode() {
     if (stale) { clearTimeout(genTimer); await generate(); }
     if (!result) { toast(error ? "Fix the error shown in the preview panel first." : (src ? "Nothing to export yet." : "Load an image first.")); return; }
-    if (!result.stats.extrudeLen && !result.stats.dots && !result.stats.knots) { toast("Nothing to print: adjust the Turing pattern or the printability filter."); return; }
+    if (!result.stats.extrudeLen && !result.stats.dots && !result.stats.knots) { toast("Nothing to print: adjust the halftone or trace settings, or the printability filter."); return; }
     const fp = frameProblem(result.box);
     if (fp) { toast("Not exported: " + fp); return; }
     const name = safeName($("fileName").value) + ".gcode";
     download(name, result.text);
     toast(`Saved ${name}`);
+  }
+
+  function setView(v) {
+    view = v;
+    $("viewTabs").querySelectorAll("button").forEach((x) => x.setAttribute("aria-selected", String(x.dataset.view === v)));
+    updateLegend(); redraw();
+  }
+
+  // Dot calibration: 10 dots from the minimum to the maximum diameter in the
+  // middle of the bed, one layer, printed with the size correction at 1× so the
+  // measurements show what the printer really makes of each size.
+  function exportCalibration() {
+    const pr = printer(), row = calibRow(), d = state.dotprint;
+    const dot = { h: d.height, flow: d.flow, dwell: d.dwell, retract: d.retract, lift: d.lift, correction: 1 };
+    const fp = frameProblem([row[0].x - 2, row[0].y - 2, row[row.length - 1].x + 2, row[0].y + 2]);
+    if (fp) { toast("Not exported: " + fp); return; }
+    const paths = row.map((c) => ({ pts: [[c.x, c.y]], closed: false, type: "Dot", d: c.d, dot, keepOrder: true }));
+    const s = Object.assign(printSettings(), { pauseLayer: 0, colourChanges: false, layersPerLevel: 1 });
+    try {
+      const r = DH.gcode.build({ name: "dot calibration", printer: pr, material: state.material, print: s, layers: [{ colour: 0, paths }], colours: state.colours, frame: frameGeom() });
+      const name = `dot_calibration_${pr.id}_${state.material.type.toLowerCase()}.gcode`;
+      download(name, r.text);
+      toast(`Saved ${name}`);
+      setView("calibration");
+    } catch (e) { toast("Dot calibration failed: " + e.message); }
+  }
+  // One measured dot → size correction = intended ÷ measured diameter.
+  function applyCalibration() {
+    const c = calibRow().find((q) => q.n === +$("calibDot").value), measured = parseFloat($("calibMeasured").value);
+    if (!c || !(measured > 0)) { toast("Enter the measured diameter of a calibration dot."); return; }
+    const k = Math.min(2, Math.max(0.5, Math.round((c.d / measured) * 100) / 100));
+    state.dotprint.correction = k;
+    renderHalftone(); onPaths(); save();
+    toast(`Size correction set to ${k}× (dot ${c.n}: ${c.d.toFixed(2)} mm intended, ${measured} mm measured)`);
   }
 
   function exportTestSquare() {
@@ -989,7 +1029,7 @@
     readJson(file, (j) => {
       const s = j.settings || j;
       if (!s.print || !s.stitches) { toast("That JSON isn't a Digital Harvest preset."); return; }
-      state = merge(clone(DEFAULTS), s);
+      state = normalize(merge(clone(DEFAULTS), s));
       levelTab = 0;
       renderAll(); onSize(); save();
       toast(`Loaded preset ${file.name}`);
@@ -1042,11 +1082,7 @@
     window.addEventListener("dragover", (e) => e.preventDefault());
     window.addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
 
-    $("viewTabs").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
-      view = b.dataset.view;
-      $("viewTabs").querySelectorAll("button").forEach((x) => x.setAttribute("aria-selected", String(x === b)));
-      updateLegend(); redraw();
-    }));
+    $("viewTabs").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
     $("layerSlider").addEventListener("input", () => { updateLayerLabel(); redraw(); });
     ["showTravel", "colourByLayer", "wholeBed"].forEach((id) => $(id).addEventListener("change", () => { updateLegend(); redraw(); }));
     $("exportGcode").addEventListener("click", exportGcode);
@@ -1056,8 +1092,9 @@
     $("saveMaterial").addEventListener("click", saveMaterial);
     $("materialFile").addEventListener("change", (e) => { if (e.target.files[0]) loadMaterial(e.target.files[0]); e.target.value = ""; });
     $("fileName").addEventListener("change", save);
-    $("simPause").addEventListener("click", pauseSim);
-    $("simRestart").addEventListener("click", () => onTuring());
+    $("exportCalib").addEventListener("click", exportCalibration);
+    $("showCalib").addEventListener("click", () => setView("calibration"));
+    $("calibApply").addEventListener("click", applyCalibration);
     $("useTraced").addEventListener("click", useTracedColours);
     $("dimWidth").addEventListener("input", () => { state.import.widthMm = +$("dimWidth").value; onSize(); save(); });
     new ResizeObserver(() => redraw()).observe($("canvasWrap"));

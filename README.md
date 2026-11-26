@@ -2,7 +2,7 @@
 
 Step 3 of **Digital Harvest**: *picking* (3D-scanning nature with Polycam) → *pressing* (the 2D UV texture from Blender's UV editor) → **embroidering** (printing that texture directly onto textile).
 
-This browser app turns the pressed UV texture into shapes, either by growing a Turing pattern (reaction-diffusion) steered by the plant's tones, or with an image trace like Illustrator's. It then writes the G-code itself, with no slicer. Fill paths imitate embroidery stitches, and up to five height levels build a stepped relief, each in its own filament colour.
+This browser app turns the pressed UV texture into print, either as **halftone dots** whose size follows the image's tones, or as shapes from an **image trace** like Illustrator's. It then writes the G-code itself, with no slicer. Traced shapes get embroidery-like stitches, and up to five height levels build a stepped relief, each in its own filament colour.
 
 Everything runs in the browser. No server, no install, and your image never leaves your computer.
 
@@ -14,26 +14,23 @@ Everything runs in the browser. No server, no install, and your image never leav
 ### The five panels
 
 1. **Import:** drop a PNG/JPG, set the output width in mm (the height follows the aspect ratio), and offset it from the bed centre. Transparent pixels are never printed.
-2. **Image treatment:** choose **turing pattern** or **image trace** with the two buttons at the top. The pipeline is: image → grayscale + levels/contrast → Turing pattern *or* image trace → height levels → printability filter → vectorize → stitches → G-code. Levels/contrast, the printability filter and everything after it apply to both.
+2. **Image treatment:** choose **halftone** or **image trace** with the two buttons at the top. The image adjustments (levels: black point, white point, midtones; contrast) and the printability filter apply to both.
 
-   **Turing pattern:** a Gray-Scott reaction-diffusion simulation grows the shapes.
-   - **Pattern:** *spots*, *stripes*, *maze* or *coral*. Feed and kill are under *advanced*.
-   - **Pattern scale:** the distance between neighbouring spots or stripes, in mm, so the pattern can match the nozzle.
-   - **Image influence:** how strongly the plant's tones steer the pattern. Each cell's darkness shifts its feed and kill: dark areas get a denser pattern, light areas thin out to bare fabric, so a white background stays unprinted.
-   - **Iterations,** with a live preview while it runs, plus **pause / resume** (pausing builds the toolpaths from the pattern as it is) and **restart**.
-   - **Random seed** and **invert** (print the gaps).
-   - **Height levels:** the final concentration is posterized into 1–5 heights, so the cores of spots and stripes stand tallest.
-   - **Image:** levels (black point, white point, midtones) and contrast before the simulation.
-   - **Printability:** removes parts narrower than the *minimum feature width* and islands smaller than the *minimum area* (smaller holes are filled). The *turing* / *trace* tab shows what was removed as red hatching.
+   **Halftone** turns the image straight into dots, with no outlines or stitches. The adjusted grayscale is sampled on a grid. Each cell becomes a dot whose diameter follows that area's darkness: the printed area grows with darkness, so the diameter is *max* × √darkness. Dots under the minimum are dropped, so light areas stay bare fabric.
+   - **Grid:** *square* or *hexagonal*, with **grid spacing** (2 mm by default) and **grid angle** (45° by default).
+   - **Minimum and maximum dot diameter:** 0.5 and 1.5 mm by default. 1.5 mm is a hard limit.
+   - **Invert:** the big dots go in the light areas.
+   - **Merge warning:** if the spacing is smaller than the largest dot, the app warns that dots will merge.
+   - **Printing:** every dot is a stationary blob, with no movement while extruding. The amount follows the dot's area. The nozzle rises a little (*Z rise while extruding*) so it doesn't sink into the blob. Between dots it retracts, lifts and travels, in nearest-neighbour order to keep travel short. *Layers per level* stacks the same dots that many times.
+   - **Dot calibration:** *export dot calibration* prints a row of 10 dots from the minimum to the maximum diameter, numbered in the preview's *calibration* tab, with the size correction at 1×. Measure one dot, enter its number and measured diameter, and *set correction* sets **size correction** to intended ÷ measured. It scales the size each dot is extruded for, so printed dots match the halftone.
+   - **Printability:** dots smaller than the *smallest printable dot* are removed and shown in red on the *halftone* tab.
 
-   It runs on the GPU (WebGL2 with float textures), so the preview stays fast. Browsers without WebGL2 fall back to the same equations in JavaScript on a coarser grid.
-
-   **Image trace:** works like Illustrator's Image Trace. Choose *b&w* (threshold), *grayscale* or *colour* (1–5 tones, clustered in the OKLab colour space), then set paths (how closely outlines follow the pixels), corners, noise and ignore white. Each tone becomes one height level, darkest tallest by default. *Use as filament colours* copies the traced colours to the level colours.
+   **Image trace:** works like Illustrator's Image Trace. Choose *b&w* (threshold), *grayscale* or *colour* (1–5 tones, clustered in the OKLab colour space), then set paths (how closely outlines follow the pixels), corners, noise and ignore white. Each tone becomes one height level, darkest tallest by default, and is printed with the stitch patterns below. *Use as filament colours* copies the traced colours to the level colours. Its printability filter removes parts narrower than the *minimum feature width* and islands smaller than the *minimum area* (smaller holes are filled), shown as red hatching on the *trace* tab.
 3. **Stitch & print:** a pattern per level: *Satin* (dense zigzag), *Fill / tatami* (parallel lines, optionally rotated each layer), *Contour* (concentric inward rings), *Running stitch* (outline, optionally dashed), *Outline + fill*, or *Dots (pointillism)*. Dots are single blobs of plastic, each pushed out in place with no movement, on a *grid*, *hex* grid or *scatter* layout. With *follow the picture's tones* on, grid dots grow in dark areas (halftone) and scattered dots bunch up there (stippling). Dots sit in the same place on every layer, so they stack into small columns. How a dot is printed: the nozzle travels high, comes down just above the surface and pushes the blob out while rising to the *dot height*, which builds a small dome. Then it pauses, retracts and lifts quickly so the thread between dots snaps. Tune it with *dot height*, *dot flow* (raise it if dots come out too small, since fabric soaks some up), *pause after each dot*, *retraction after each dot* (raise it for strings, keep it low for TPU) and *lift between dots*. On later layers each dot lands on the one below, one dot height higher. Expect long print times for big or dense designs.
 
 **Coral** grows one line per shape by differential growth, and the preview animates it. Points repel nearby points, attract their two neighbours, and a new point appears where two neighbours drift apart. The line stays inside the shape, never crosses itself, and folds more densely where the picture is darker. The line is then printed as **knots joined by a continuous thread**: at every knot point the nozzle pushes a knot while rising (using the dot settings: knot size, height, flow and pause), and between points it keeps extruding as it moves. Inside a line there is no travel and no retraction, only at its end. The settings are knot spacing, knot size, thread flow (separate from knot flow), minimum spacing between line parts (twice the knot size until you change it), growth steps, random seed, follow the tones, and knots every N points (plain thread in between). When consecutive levels all use Coral with the same growth settings, the line grows once on the lowest level, and higher levels reprint the parts of it inside their shape, so the knots stack into columns. On those higher levels a shape can therefore hold a few pieces of the line rather than exactly one. Then line width, layer height, layers per level, first-layer Z, Z offset, speeds, first-layer flow, retraction and a pause layer for sandwich mode.
 4. **Machine & material:** a Bambu Lab printer (A1 mini, A1, P1P, P1S, X1 Carbon, H2D, A2L), nozzle, build plate, *skip auto bed leveling*, an editable material (PLA / PETG / TPU 95A, or your own saved presets), a filament colour per level, and **Export test square**.
-5. **Preview & export:** original, turing or toolpath view with a layer slider, travel moves dashed, colour by filament or by layer. A status line shows the time and the filament weight per colour. **Export G-code** saves `name.gcode`.
+5. **Preview & export:** original, halftone / trace, calibration (halftone) or toolpath view. Dots are drawn at their real printed size with a layer slider, travel moves dashed, colour by filament or by layer. A status line shows the time and the filament weight per colour. **Export G-code** saves `name.gcode`.
 
 **Save preset** / **Load preset** write and read every setting as a JSON file, e.g. `fern_satin.json`.
 
@@ -57,7 +54,7 @@ Copy the `.gcode` file to the root of the printer's SD card and start it from th
 |---|---|
 | `js/raster.js` | working grid, grayscale/RGB copy, despeckle, and the signed distance field of each level |
 | `js/coral.js` | Coral: differential growth of one polyline per shape (repulsion, neighbour attraction, insertion; stays inside, never self-crossing), resampled into knots |
-| `js/turing.js` | Gray-Scott reaction-diffusion (WebGL2, with a JavaScript fallback), image-steered feed/kill, posterize into height levels |
+| `js/halftone.js` | halftone: grid sampling (square / hex, rotated) → dots sized by darkness, the dot printability filter, the calibration row |
 | `js/trace.js` | image trace: threshold or k-means clustering (OKLab) → level map, with corner rounding and noise removal |
 | `js/printability.js` | printability filter: minimum feature width (opening), minimum island/hole area, and the removed areas for the red preview |
 | `js/geometry.js` | exact Euclidean distance transform, marching-squares iso-contours, Douglas–Peucker simplification, scanline clipping |
@@ -91,17 +88,15 @@ The A2L limits its Y (bed) acceleration as the print gets heavier. Like Bambu St
 node tests/run_tests.js
 ```
 
-The tests check the template interpreter, the Turing presets (spots, stripes, maze, coral), image influence, seeds, posterizing and invert, the image trace modes, the printability filter, every stitch pattern, and a full G-code build for every printer, with no unresolved placeholders and no NaN moves.
+The tests check the template interpreter, the halftone (grid types, dot sizes following darkness, the 1.5 mm limit, invert, transparency, the merge rule, the dot printability filter, nearest-neighbour order, stationary dots whose extrusion scales with size and correction, and the calibration row), the image trace modes, the printability filter, every stitch pattern, and a full G-code build for every printer, with no unresolved placeholders and no NaN moves.
 
 ## Status and roadmap
 
-- Done: milestones 1–5 of the spec (import and Turing pattern, Bambu profiles plus test square, all stitch patterns, height levels with manual colour change, toolpath preview, stats, presets).
+- Done: milestones 1–5 of the spec (import, halftone and image trace, Bambu profiles plus test square, all stitch patterns, height levels with manual colour change, toolpath preview, stats, presets).
 - **Not yet tested on a printer.** Print the test square first on each printer.
 - **H2D:** its start G-code is written for two nozzles. The app fills it in for one filament on one nozzle (`filament_map = 1`), so check that one with the test square before anything else.
 - Next, milestone 6: export `.gcode.3mf` so files can go through Bambu Studio / Handy with AMS slot mapping and automatic colour changes.
 
 ## Credits
-
-The Turing-pattern step is inspired by [TexTuring](https://ivan-murit.fr/) by [Ivan Murit](https://ivan-murit.fr/) ([source](https://github.com/ivangrozny/TexTuring)), a dithering tool that grows reaction-diffusion patterns on images. This app's simulation is its own implementation; no TexTuring code is used.
 
 The interface is set in [Hasköy](https://github.com/ertekinno/haskoy) by Ertekin Erdin. It is licensed under the SIL Open Font License 1.1 (see `fonts/Haskoy-OFL.txt`) and served from this repo.
