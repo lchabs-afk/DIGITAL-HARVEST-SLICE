@@ -1,40 +1,28 @@
-// Digital Harvest Stitch: UI, state, presets and the image → G-code pipeline.
+// Digital Harvest Stitch: UI, state, presets and the source → halftone → G-code pipeline.
 (function (DH) {
   "use strict";
   const $ = (id) => document.getElementById(id);
 
   // ---------------------------------------------------------------- state
-  const STITCH_DEFAULT = { pattern: "outline_fill", fill: "tatami", angle: 45, spacing: 0.45, rotate: 90, outlinePasses: 1, dashed: false, dashLen: 2, gapLen: 1,
-    dotLayout: "hex", dotSize: 1.2, dotSpacing: 1.8, dotTone: true,
-    dotHeight: 0.6, dotFlow: 1.2, dotDwell: 0.3, dotRetract: 1.2, dotLift: 2,
-    coralSpacing: 2, coralThreadFlow: 0.6, coralSep: 2.4, coralSteps: 300, coralSeed: 1, coralKnotEvery: 1, coralSepAuto: true };
   const DEFAULTS = {
+    input: { mode: "image", lighting: "texture" },
     import: { widthMm: 80, offX: 0, offY: 0, mirror: false },
     tone: { black: 0, white: 255, gamma: 1, contrast: 0 },
-    treatment: "halftone", // or "trace"
-    trace: { mode: "colour", threshold: 128, colours: 3, paths: 60, corners: 50, noiseMm: 0.5, ignoreWhite: true, darkHigh: true },
     halftone: { grid: "square", spacing: 2, angle: 45, minD: 0.5, maxD: 1.5, invert: false },
-    // how halftone dots are printed; correction comes from the dot calibration
+    // how dots are printed; correction comes from the dot calibration
     dotprint: { height: 0.6, flow: 1.2, dwell: 0.3, retract: 1.2, lift: 2, correction: 1 },
-    printable: { minWidthMm: 0.5, minAreaMm2: 0.5, simplify: 0.03, alphaMask: true },
+    printable: { minWidthMm: 0.5, alphaMask: true },
+    // dots: retract, lift and travel between dots. coral: a thread between dots.
+    stitch: { mode: "dots", maxThread: 6, maxThreadAuto: true, threadFlow: 0.6 },
     machine: { printer: "a1mini", nozzle: 0.4, bedType: "Textured PEI Plate", skipLeveling: true },
     material: Object.assign({}, DH.MATERIALS[0]),
     colours: [
       { name: "Moss", hex: "#4f6b3a" }, { name: "Ochre", hex: "#c08a2b" }, { name: "Madder", hex: "#a8402f" },
       { name: "Indigo", hex: "#2f45b5" }, { name: "Bark", hex: "#5b4636" },
     ],
-    colourChanges: true,
     frame: { enabled: false, outerX: 235, outerY: 235, wall: 15, height: 10, margin: 5, clearance: 2, pauseToPlace: true },
-    stitchSame: false,
-    stitches: [
-      Object.assign({}, STITCH_DEFAULT),
-      Object.assign({}, STITCH_DEFAULT, { pattern: "satin", angle: -30, rotate: 0 }),
-      Object.assign({}, STITCH_DEFAULT, { pattern: "contour" }),
-      Object.assign({}, STITCH_DEFAULT, { pattern: "tatami", angle: 0 }),
-      Object.assign({}, STITCH_DEFAULT, { pattern: "running", outlinePasses: 1, dashed: true }),
-    ],
     print: { lineWidth: 0.45, layerHeight: 0.2, layersPerLevel: 2, firstLayerZ: 0, zOffset: 0, speed: 40, firstSpeed: 15, travelSpeed: 150, firstLayerFlow: 1.1, retractMinTravel: 2, zHop: 0.4, pauseLayer: 0 },
-    fileName: "fern_satin",
+    fileName: "digital_harvest",
   };
   const clone = (o) => JSON.parse(JSON.stringify(o));
   function merge(base, over) {
@@ -52,17 +40,20 @@
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } },
   };
 
-  // Values a stored state or preset may hold that no longer exist (e.g. the
-  // removed Turing treatment) fall back to the defaults.
+  // Values a stored state or preset may hold that no longer exist fall back to
+  // the defaults (settings of removed features are simply not copied by merge).
   function normalize(st) {
-    if (!["halftone", "trace"].includes(st.treatment)) st.treatment = DEFAULTS.treatment;
+    if (!["image", "scan"].includes(st.input.mode)) st.input.mode = "image";
+    if (!["texture", "lit"].includes(st.input.lighting)) st.input.lighting = "texture";
+    if (!["dots", "coral"].includes(st.stitch.mode)) st.stitch.mode = "dots";
+    if (!["square", "hex"].includes(st.halftone.grid)) st.halftone.grid = "square";
     st.halftone.maxD = Math.min(DH.halftone.MAX_DOT, st.halftone.maxD);
     st.halftone.minD = Math.min(st.halftone.maxD, st.halftone.minD);
     return st;
   }
   let state = normalize(merge(clone(DEFAULTS), store.get("dh.state") || {}));
   let customMaterials = store.get("dh.materials") || [];
-  let levelTab = 0, view = "paths";
+  let view = "paths", showCalib = false;
 
   const get = (path) => path.split(".").reduce((o, k) => o[k], state);
   function set(path, v) {
@@ -70,14 +61,10 @@
     ks.reduce((o, k) => o[k], state)[last] = v;
   }
   const printer = () => DH.PRINTERS.find((p) => p.id === state.machine.printer) || DH.PRINTERS[0];
-  // Number of height levels: one per traced tone; halftone dots are one level.
-  const levelCount = () => (state.treatment === "trace"
-    ? (state.trace.mode === "bw" ? 1 : Math.max(1, Math.min(5, state.trace.colours)))
-    : 1);
 
-  // Optional frame on the plate, centred on the bed. Returns rectangles
-  // [x0, y0, x1, y1] in bed mm: the outer edge, the inner edge, and the safe
-  // area the nozzle must stay inside (inner edge minus the keep-out margin).
+  // Optional magnet keep-out frame on the plate, centred on the bed. Rectangles
+  // [x0, y0, x1, y1] in bed mm: outer edge, inner edge, and the safe area the
+  // nozzle must stay inside (inner edge minus the margin).
   function frameGeom() {
     const f = state.frame;
     if (!f.enabled) return null;
@@ -105,10 +92,9 @@
   }
 
   // ---------------------------------------------------------------- field builder
-  // size: new working grid; halftone / trace: redo that treatment; levels:
-  // re-apply the printability filter; paths / gcode: rebuild.
-  // treat: redo the image treatment in use (halftone or trace).
-  const NEXT = { size: onSize, treat: onTreat, halftone: onHalftone, trace: onTrace, levels: onLevels, paths: onPaths, gcode: onGcode, none: () => {} };
+  // size: new working grid; halftone: redo the dots; scan: re-render the 3D
+  // view; paths / gcode: rebuild.
+  const NEXT = { size: onSize, halftone: onHalftone, scan: updateFromScan, paths: onPaths, gcode: onGcode, none: () => {} };
 
   // Slider end labels in the [04] [07] [10] style.
   function tickLabel(v, step) {
@@ -177,6 +163,32 @@
   }
 
   // ---------------------------------------------------------------- panels
+  // 01: image or 3D scan
+  function renderInput() {
+    const scan = state.input.mode === "scan";
+    $("inputMode").querySelectorAll("button").forEach((b) => {
+      b.setAttribute("aria-pressed", String(b.dataset.mode === state.input.mode));
+      b.onclick = () => {
+        if (state.input.mode === b.dataset.mode) return;
+        state.input.mode = b.dataset.mode;
+        renderInput(); save();
+        clearSource();
+      };
+    });
+    $("imageBtns").hidden = scan;
+    $("scanBtns").hidden = !scan;
+    $("f-scan").hidden = !scan;
+    if (!src) {
+      $("imgName").textContent = "Nothing imported yet";
+      $("imgInfo").textContent = scan ? "Drop a .glb 3D scan (e.g. a Polycam export with textures)" : "Drop a PNG or JPG";
+    }
+    fill("f-scan", [
+      { path: "input.lighting", label: "Lighting", type: "seg", wide: true, options: [["texture", "texture only"], ["lit", "lit"]], on: "scan",
+        after: (v) => DH.scan3d && DH.scan3d.setLighting(v),
+        help: "Texture only shows the scan's true colours, unlit. Lit adds shading, so the shape's depth shows in the dots." },
+    ]);
+  }
+
   function renderImport() {
     fill("f-import", [
       { path: "import.widthMm", label: "Output width", type: "range", min: 10, max: 340, step: 1, unit: "mm", on: "size" },
@@ -192,7 +204,7 @@
   function updateSizeLine() {
     const el = $("sizeLine");
     if (!el || !src) return;
-    el.textContent = `Print size ${state.import.widthMm.toFixed(0)} × ${heightMm().toFixed(1)} mm (height follows the image's aspect ratio).`;
+    el.textContent = `Print size ${state.import.widthMm.toFixed(0)} × ${heightMm().toFixed(1)} mm (height follows the source's aspect ratio).`;
     $("dimW").textContent = state.import.widthMm.toFixed(0);
     $("dimH").textContent = heightMm().toFixed(1);
     $("dimWidth").value = state.import.widthMm;
@@ -204,17 +216,12 @@
     }
   }
 
-  function levelsChanged() {
-    levelTab = Math.min(levelTab, levelCount() - 1);
-    renderColours(); renderStitch();
-  }
-
-  // Panel 02, halftone: grid, dot sizes, how dots are printed, calibration.
+  // 02: halftone grid, dot sizes, how dots are printed, calibration
   function renderHalftone() {
-    const h = state.halftone;
     fill("f-halftone", [
       { path: "halftone.grid", label: "Grid", type: "seg", wide: true, options: [["square", "square"], ["hex", "hexagonal"]], on: "halftone" },
-      { path: "halftone.spacing", label: "Grid spacing", type: "range", min: 0.5, max: 10, step: 0.1, unit: "mm", on: "halftone", after: updateMergeHint },
+      { path: "halftone.spacing", label: "Grid spacing", type: "range", min: 0.5, max: 10, step: 0.1, unit: "mm", on: "halftone",
+        after: (v) => { updateMergeHint(); if (state.stitch.maxThreadAuto) { state.stitch.maxThread = Math.round(v * 3 * 100) / 100; renderStitch(); } } },
       { path: "halftone.angle", label: "Grid angle", type: "range", min: -90, max: 90, step: 1, unit: "°", on: "halftone" },
       { path: "halftone.minD", label: "Minimum dot diameter", type: "range", min: 0, max: DH.halftone.MAX_DOT, step: 0.05, unit: "mm", on: "halftone",
         after: renderCalibDots, help: "Smaller dots are dropped, so light areas stay bare fabric." },
@@ -233,8 +240,21 @@
       { path: "dotprint.correction", label: "Size correction", type: "range", min: 0.5, max: 2, step: 0.01, unit: "×", on: "paths",
         help: "From the dot calibration: intended ÷ measured diameter. Scales the size each dot is extruded for." },
       { path: "dotprint.dwell", label: "Pause after each dot", type: "range", min: 0, max: 2, step: 0.05, unit: "s", on: "paths" },
-      { path: "dotprint.retract", label: "Retraction after each dot", type: "range", min: 0, max: 4, step: 0.05, unit: "mm", on: "paths" },
-      { path: "dotprint.lift", label: "Lift between dots", type: "range", min: 0.4, max: 10, step: 0.1, unit: "mm", on: "paths" },
+      { path: "dotprint.retract", label: "Retraction", type: "range", min: 0, max: 4, step: 0.05, unit: "mm", on: "paths",
+        help: "After each dot (dots mode), or where a coral thread breaks." },
+      { path: "dotprint.lift", label: "Lift", type: "range", min: 0.4, max: 10, step: 0.1, unit: "mm", on: "paths" },
+    ]);
+    fill("f-tone", [
+      { path: "tone.black", label: "Levels: black point", type: "range", min: 0, max: 254, step: 1, unit: "", on: "halftone" },
+      { path: "tone.white", label: "Levels: white point", type: "range", min: 1, max: 255, step: 1, unit: "", on: "halftone" },
+      { path: "tone.gamma", label: "Levels: midtones (gamma)", type: "range", min: 0.2, max: 4, step: 0.05, unit: "", on: "halftone" },
+      { path: "tone.contrast", label: "Contrast", type: "range", min: -90, max: 90, step: 1, unit: "", on: "halftone" },
+    ]);
+    fill("f-printable", [
+      { path: "printable.minWidthMm", label: "Smallest printable dot", type: "range", min: 0, max: 1.5, step: 0.05, unit: "mm", on: "halftone",
+        help: "Dots smaller than this can't be printed reliably and are removed. Shown in red on the halftone tab." },
+      { path: "printable.alphaMask", label: "Never print transparent pixels", type: "check", on: "halftone",
+        help: "Transparent areas (and the empty space around a 3D scan) get no dots." },
     ]);
     renderCalibDots();
   }
@@ -259,100 +279,46 @@
     if (keep) sel.value = keep;
   }
 
-  // Image adjustments and the printability filter, shared by both treatments.
-  function renderShared() {
-    const half = state.treatment === "halftone";
-    fill("f-tone", [
-      { path: "tone.black", label: "Levels: black point", type: "range", min: 0, max: 254, step: 1, unit: "", on: "treat" },
-      { path: "tone.white", label: "Levels: white point", type: "range", min: 1, max: 255, step: 1, unit: "", on: "treat" },
-      { path: "tone.gamma", label: "Levels: midtones (gamma)", type: "range", min: 0.2, max: 4, step: 0.05, unit: "", on: "treat" },
-      { path: "tone.contrast", label: "Contrast", type: "range", min: -90, max: 90, step: 1, unit: "", on: "treat" },
-    ]);
-    fill("f-printable", half ? [
-      { path: "printable.minWidthMm", label: "Smallest printable dot", type: "range", min: 0, max: 1.5, step: 0.05, unit: "mm", on: "levels",
-        help: "Dots smaller than this can't be printed reliably and are removed. Shown in red on the halftone tab." },
-      { path: "printable.alphaMask", label: "Never print transparent pixels", type: "check", on: "treat" },
-    ] : [
-      { path: "printable.minWidthMm", label: "Minimum feature width", type: "range", min: 0, max: 3, step: 0.05, unit: "mm", on: "levels",
-        help: "Removes parts narrower than this. Shown in red on the trace tab." },
-      { path: "printable.minAreaMm2", label: "Minimum island and hole area", type: "range", min: 0, max: 20, step: 0.1, unit: "mm²", on: "levels" },
-      { path: "printable.alphaMask", label: "Never print transparent pixels", type: "check", on: "treat" },
-    ]);
-  }
-
-  // Panel 02 switch: halftone or image trace.
-  function renderTreatment() {
-    const trace = state.treatment === "trace";
-    $("treatMode").querySelectorAll("button").forEach((b) => {
-      b.setAttribute("aria-pressed", String(b.dataset.mode === state.treatment));
-      b.onclick = () => {
-        if (state.treatment === b.dataset.mode) return;
-        state.treatment = b.dataset.mode;
-        if (view === "calibration") view = "treat";
-        renderTreatment(); levelsChanged(); onTreat(); save();
-      };
-    });
-    $("halftoneBox").hidden = trace;
-    $("traceBox").hidden = !trace;
-    $("viewTabs").querySelector('[data-view="treat"]').textContent = trace ? "trace" : "halftone";
-    $("viewTabs").querySelector('[data-view="calibration"]').hidden = trace;
-    // halftone prints dots directly: no stitch patterns
-    $("stitchNote").hidden = trace;
-    ["f-stitch-mode", "f-stitch"].forEach((id) => { $(id).hidden = !trace; });
-    if (!trace) $("levelTabs").hidden = true;
-    $("viewTabs").querySelectorAll("button").forEach((x) => x.setAttribute("aria-selected", String(x.dataset.view === view)));
-    renderHalftone();
-    renderShared();
-    renderTrace();
-  }
-
-  // Image trace: like Illustrator's, flat tones or colours, one per height level.
-  function renderTrace() {
-    const t = state.trace, specs = [
-      { path: "trace.mode", label: "Mode", type: "seg", wide: true, options: [["bw", "b&w"], ["gray", "grayscale"], ["colour", "colour"]], on: "trace",
-        after: () => { renderTrace(); levelsChanged(); } },
+  // 03: stitch mode and print settings
+  function renderStitch() {
+    const coral = state.stitch.mode === "coral";
+    const specs = [
+      { path: "stitch.mode", label: "Stitch mode", type: "seg", wide: true, options: [["dots", "dots"], ["coral", "coral"]], after: () => renderStitch(),
+        help: coral
+          ? "Coral: no lift or retraction between dots; a thin thread is extruded to the next dot, along the grid rows in a serpentine, so threads never cross."
+          : "Dots: retract, lift and travel between dots, in nearest-neighbour order." },
     ];
-    if (t.mode === "bw") {
-      specs.push({ path: "trace.threshold", label: "Threshold", type: "range", min: 0, max: 255, step: 1, unit: "", on: "trace", help: "Pixels darker than this are printed." });
-    } else {
-      specs.push({ path: "trace.colours", label: t.mode === "gray" ? "Grays" : "Colours", type: "seg", options: [1, 2, 3, 4, 5].map((n) => [n, String(n)]), on: "trace",
-        after: levelsChanged, help: "How many tones to keep. Each one is printed as its own height level." });
-    }
-    specs.push(
-      { path: "trace.paths", label: "Paths", type: "range", min: 0, max: 100, step: 1, unit: "%", on: "paths", help: "High follows the pixels closely; low gives smoother, simpler paths." },
-      { path: "trace.corners", label: "Corners", type: "range", min: 0, max: 100, step: 1, unit: "%", on: "trace", help: "High keeps sharp corners; low rounds them." },
-      { path: "trace.noiseMm", label: "Noise", type: "range", min: 0, max: 5, step: 0.1, unit: "mm", on: "trace", help: "Ignores islands and holes smaller than this." },
+    if (coral) specs.push(
+      { path: "stitch.maxThread", label: "Max thread length", type: "range", min: 0.5, max: 30, step: 0.1, unit: "mm",
+        after: () => { state.stitch.maxThreadAuto = false; },
+        help: "If the next dot is further away, the thread breaks: retract, lift and travel. Follows 3× the grid spacing until you change it." },
+      { path: "stitch.threadFlow", label: "Thread flow", type: "range", min: 0.1, max: 2, step: 0.05, unit: "×",
+        help: "Plastic in the thread, as a share of a normal line. Lower makes it thinner than the dots." },
     );
-    if (t.mode !== "bw") specs.push({ path: "trace.ignoreWhite", label: "Ignore white", type: "check", on: "trace", help: "Leaves the lightest tone as bare fabric." });
-    specs.push({ path: "trace.darkHigh", label: "Dark areas are the tallest", type: "check", on: "trace" });
-    fill("f-trace", specs);
-    renderTracedColours();
+    fill("f-stitch", specs);
   }
 
-  let traced = [];
-  function renderTracedColours() {
-    const box = $("tracedSwatches");
-    box.innerHTML = "";
-    traced.forEach((hex, k) => {
-      const sp = document.createElement("span");
-      sp.innerHTML = `<i style="background:${hex}"></i>l${k + 1}`;
-      box.appendChild(sp);
-    });
-    $("useTraced").disabled = !traced.length;
-  }
-  function useTracedColours() {
-    traced.forEach((hex, k) => { if (state.colours[k]) state.colours[k].hex = hex; });
-    lvCanvas = null;
-    renderColours(); renderStitchTabs(); updateLegend(); updateStats(); redraw(); save();
-    toast("Filament colours set from the trace");
+  function renderPrint() {
+    fill("f-print", [
+      { path: "print.layersPerLevel", label: "Layers", type: "range", min: 1, max: 20, step: 1, unit: "", help: "The same dots, stacked this many times." },
+      { path: "print.lineWidth", label: "Line width", type: "range", min: 0.1, max: 2, step: 0.01, unit: "mm", help: "Used for the coral thread and the test square." },
+      { path: "print.layerHeight", label: "Layer height", type: "range", min: 0.04, max: 0.6, step: 0.01, unit: "mm" },
+      { path: "print.pauseLayer", label: "Pause before layer", type: "range", min: 0, max: 200, step: 1, unit: "" },
+      { path: "print.firstLayerZ", label: "First layer Z", type: "range", min: 0, max: 1, step: 0.01, unit: "mm", on: "gcode" },
+      { path: "print.zOffset", label: "Z offset (fabric)", type: "range", min: -1, max: 5, step: 0.01, unit: "mm", on: "gcode" },
+      { path: "print.speed", label: "Thread speed", type: "range", min: 5, max: 300, step: 1, unit: "mm/s", on: "gcode" },
+      { path: "print.firstSpeed", label: "First-layer speed", type: "range", min: 3, max: 100, step: 1, unit: "mm/s", on: "gcode" },
+      { path: "print.travelSpeed", label: "Travel speed", type: "range", min: 20, max: 500, step: 5, unit: "mm/s", on: "gcode" },
+      { path: "print.firstLayerFlow", label: "First-layer flow", type: "range", min: 0.5, max: 2, step: 0.01, unit: "×", on: "gcode" },
+    ]);
   }
 
-
+  // 04: machine, material, filament colour, magnet frame
   function renderMachine() {
     const p = printer();
     fill("f-machine", [
       { path: "machine.printer", label: "Printer", type: "select", options: DH.PRINTERS.map((x) => [x.id, "Bambu Lab " + x.name]), on: "paths",
-        after: () => renderMachine() },
+        after: () => { renderMachine(); renderCalibDots(); } },
       { path: "machine.nozzle", label: "Nozzle", type: "select", options: p.nozzles.map((n) => [n, n + " mm"]), on: "paths",
         after: (n) => { state.print.lineWidth = Math.round(n * 1.125 * 100) / 100; renderPrint(); } },
       { path: "machine.bedType", label: "Build plate", type: "select", options: ["Textured PEI Plate", "Cool Plate", "Engineering Plate", "High Temp Plate"].map((x) => [x, x]), on: "gcode",
@@ -441,153 +407,53 @@
     for (const s of specs) grid.appendChild(field(s));
   }
 
+  // One filament colour (dots are a single level).
   function renderColours() {
     const c = $("colours");
     c.innerHTML = "";
-    for (let k = 0; k < levelCount(); k++) {
-      const col = state.colours[k];
-      const row = document.createElement("div");
-      row.className = "colour-row";
-      row.innerHTML = `<span class="lv">L${k + 1}</span><input type="color" aria-label="Level ${k + 1} colour" id="col_${k}"><input type="text" aria-label="Level ${k + 1} filament name" id="colname_${k}">`;
-      const [pick, name] = row.querySelectorAll("input");
-      pick.value = col.hex; name.value = col.name;
-      pick.addEventListener("input", () => { col.hex = pick.value; renderStitchTabs(); redraw(); updateLegend(); save(); });
-      name.addEventListener("change", () => { col.name = name.value || "Level " + (k + 1); onGcode(); save(); });
-      c.appendChild(row);
-    }
-    fill("f-colour", [
-      { path: "colourChanges", label: "Pause for a filament change when the colour changes", type: "check", on: "gcode",
-        help: "The print pauses (M400 U1) at the first layer of a level whose colour differs. Swap filament on the printer, then resume." },
-    ]);
-  }
-
-  function renderStitchTabs() {
-    const tabs = $("levelTabs");
-    tabs.innerHTML = "";
-    tabs.hidden = state.stitchSame || levelCount() < 2 || state.treatment === "halftone";
-    if (tabs.hidden) return;
-    for (let k = 0; k < levelCount(); k++) {
-      const b = document.createElement("button");
-      b.type = "button"; b.setAttribute("role", "tab");
-      b.setAttribute("aria-selected", String(k === levelTab));
-      b.innerHTML = `<span class="dot" style="background:${state.colours[k].hex}"></span>Level ${k + 1}`;
-      b.addEventListener("click", () => { levelTab = k; renderStitch(); });
-      tabs.appendChild(b);
-    }
-  }
-  function renderStitch() {
-    fill("f-stitch-mode", [
-      { path: "stitchSame", label: "Same stitch for every level", type: "check", on: "paths", after: () => renderStitch() },
-    ]);
-    renderStitchTabs();
-    const k = state.stitchSame ? 0 : levelTab;
-    const st = state.stitches[k], base = "stitches." + k + ".";
-    const pat = st.pattern;
-    const specs = [
-      { path: base + "pattern", label: "Stitch pattern", type: "select", options: Object.entries(DH.stitches.PATTERNS).map(([v, p]) => [v, p.label]), after: () => renderStitch() },
-    ];
-    if (pat === "outline_fill") specs.push({ path: base + "fill", label: "Fill after the outline", type: "select", options: [["tatami", "Fill / tatami"], ["satin", "Satin"], ["contour", "Contour"]], after: () => renderStitch() });
-    const fillKind = pat === "outline_fill" ? st.fill : pat;
-    if (pat === "coral") {
-      specs.push(
-        { path: base + "coralSpacing", label: "Knot spacing", type: "range", min: 0.5, max: 10, step: 0.1, unit: "mm", help: "Distance between knots along the line." },
-        { path: base + "dotSize", label: "Knot size", type: "range", min: 0.3, max: 5, step: 0.05, unit: "mm",
-          after: (v) => { if (st.coralSepAuto !== false) { st.coralSep = Math.round(v * 2 * 100) / 100; renderStitch(); } } },
-        { path: base + "coralSep", label: "Minimum spacing between line parts", type: "range", min: 0.5, max: 12, step: 0.05, unit: "mm",
-          after: () => { st.coralSepAuto = false; },
-          help: "How close two parts of the line may come. Follows twice the knot size (so knots don't merge) until you change it." },
-        { path: base + "coralSteps", label: "Growth steps", type: "range", min: 20, max: 2000, step: 10, unit: "", help: "More steps: a longer, more folded line, up to what fits in the shape." },
-        { path: base + "coralSeed", label: "Random seed", type: "range", min: 1, max: 999, step: 1, unit: "", help: "Change it for a different growth with the same settings." },
-        { path: base + "dotTone", label: "Follow the picture's tones", type: "check", help: "Dark areas fold more densely; light areas stay looser." },
-        { path: base + "coralKnotEvery", label: "Knots every N points", type: "range", min: 1, max: 20, step: 1, unit: "", help: "1 knots every point. Higher leaves plain thread between knots." },
-        { path: base + "coralThreadFlow", label: "Thread flow", type: "range", min: 0.1, max: 2, step: 0.05, unit: "×", on: "paths",
-          help: "Plastic in the connecting thread, as a share of a normal line. Lower makes the thread thinner than the knots." },
-        { path: base + "dotFlow", label: "Knot flow", type: "range", min: 0.5, max: 3, step: 0.05, unit: "×", on: "paths", help: "Extra plastic per knot." },
-        { path: base + "dotHeight", label: "Knot height", type: "range", min: 0.1, max: 2, step: 0.05, unit: "mm", on: "paths",
-          help: "The nozzle rises this much while pushing a knot, so it doesn't sink into the blob." },
-        { path: base + "dotDwell", label: "Pause after each knot", type: "range", min: 0, max: 2, step: 0.05, unit: "s", on: "paths" },
-        { path: base + "dotRetract", label: "Retraction at the end of a line", type: "range", min: 0, max: 4, step: 0.05, unit: "mm", on: "paths" },
-        { path: base + "dotLift", label: "Lift at the end of a line", type: "range", min: 0.4, max: 10, step: 0.1, unit: "mm", on: "paths" },
-      );
-      fill("f-stitch", specs);
-      return;
-    }
-    if (pat === "dots") {
-      specs.push(
-        { path: base + "dotLayout", label: "Layout", type: "seg", wide: true, options: [["grid", "grid"], ["hex", "hex"], ["scatter", "scatter"]], after: () => renderStitch() },
-        { path: base + "dotSize", label: "Dot size", type: "range", min: 0.3, max: 5, step: 0.05, unit: "mm", help: "Diameter of each blob of plastic." },
-        { path: base + "dotSpacing", label: "Dot spacing", type: "range", min: 0.4, max: 10, step: 0.05, unit: "mm", help: "Distance between dot centres. Bigger than the dot size leaves fabric showing between them." },
-        { path: base + "dotTone", label: "Follow the picture's tones", type: "check", help: st.dotLayout === "scatter" ? "Dots bunch up in dark areas and thin out in light ones (stippling)." : "Dots grow in dark areas and shrink in light ones (halftone)." },
-      );
-      if (st.dotLayout !== "scatter") specs.push({ path: base + "angle", label: "Grid angle", type: "range", min: -90, max: 90, step: 1, unit: "°" });
-      specs.push(
-        { path: base + "dotHeight", label: "Dot height", type: "range", min: 0.1, max: 2, step: 0.05, unit: "mm", on: "paths",
-          help: "How thick each blob is. The nozzle pushes plastic out while rising to this height, and dots on later layers sit on top." },
-        { path: base + "dotFlow", label: "Dot flow", type: "range", min: 0.5, max: 3, step: 0.05, unit: "×", on: "paths",
-          help: "Extra plastic per dot. Raise it if dots come out smaller than the dot size; fabric soaks some up." },
-        { path: base + "dotDwell", label: "Pause after each dot", type: "range", min: 0, max: 2, step: 0.05, unit: "s", on: "paths",
-          help: "Lets the pressure settle before leaving, so less plastic follows the nozzle." },
-        { path: base + "dotRetract", label: "Retraction after each dot", type: "range", min: 0, max: 4, step: 0.05, unit: "mm", on: "paths",
-          help: "Pulls the filament back before lifting. Raise it if strings remain; keep it low for TPU." },
-        { path: base + "dotLift", label: "Lift between dots", type: "range", min: 0.4, max: 10, step: 0.1, unit: "mm", on: "paths",
-          help: "A quick, high lift snaps the thread between dots." },
-      );
-      fill("f-stitch", specs);
-      return;
-    }
-    if (pat === "running" || pat === "outline_fill") specs.push({ path: base + "outlinePasses", label: "Outline passes", type: "range", min: 1, max: 6, step: 1, unit: "" });
-    if (fillKind === "satin" || fillKind === "tatami") {
-      specs.push({ path: base + "angle", label: "Angle", type: "range", min: -90, max: 90, step: 1, unit: "°" });
-      specs.push({ path: base + "rotate", label: "Rotate angle each layer", type: "range", min: 0, max: 180, step: 5, unit: "°" });
-    }
-    if (pat !== "running") specs.push({ path: base + "spacing", label: "Line spacing (density)", type: "range", min: 0.2, max: 3, step: 0.01, unit: "mm", help: "Equal to the line width gives a solid fill; wider leaves the weave showing." });
-    if (pat === "running") {
-      specs.push({ path: base + "dashed", label: "Dashed, like a running stitch", type: "check", after: () => renderStitch() });
-      if (st.dashed) {
-        specs.push({ path: base + "dashLen", label: "Stitch length", type: "range", min: 0.5, max: 10, step: 0.1, unit: "mm" });
-        specs.push({ path: base + "gapLen", label: "Gap length", type: "range", min: 0.3, max: 10, step: 0.1, unit: "mm" });
-      }
-    }
-    fill("f-stitch", specs);
-  }
-
-  function renderPrint() {
-    fill("f-print", [
-      { path: "print.lineWidth", label: "Line width", type: "range", min: 0.1, max: 2, step: 0.01, unit: "mm" },
-      { path: "print.layerHeight", label: "Layer height", type: "range", min: 0.04, max: 0.6, step: 0.01, unit: "mm" },
-      { path: "print.layersPerLevel", label: "Layers per level", type: "range", min: 1, max: 20, step: 1, unit: "" },
-      { path: "print.pauseLayer", label: "Pause before layer", type: "range", min: 0, max: 200, step: 1, unit: "" },
-      { path: "print.firstLayerZ", label: "First layer Z", type: "range", min: 0, max: 1, step: 0.01, unit: "mm", on: "gcode" },
-      { path: "print.zOffset", label: "Z offset (fabric)", type: "range", min: -1, max: 5, step: 0.01, unit: "mm", on: "gcode" },
-      { path: "print.speed", label: "Print speed", type: "range", min: 5, max: 300, step: 1, unit: "mm/s", on: "gcode" },
-      { path: "print.firstSpeed", label: "First-layer speed", type: "range", min: 3, max: 100, step: 1, unit: "mm/s", on: "gcode" },
-      { path: "print.travelSpeed", label: "Travel speed", type: "range", min: 20, max: 500, step: 5, unit: "mm/s", on: "gcode" },
-      { path: "print.firstLayerFlow", label: "First-layer flow", type: "range", min: 0.5, max: 2, step: 0.01, unit: "×", on: "gcode" },
-      { path: "print.retractMinTravel", label: "Retract on travel over", type: "range", min: 0, max: 20, step: 0.5, unit: "mm", on: "gcode" },
-      { path: "print.zHop", label: "Z lift on retract", type: "range", min: 0, max: 3, step: 0.05, unit: "mm", on: "gcode" },
-    ]);
+    const col = state.colours[0];
+    const row = document.createElement("div");
+    row.className = "colour-row";
+    row.innerHTML = `<span class="lv">dots</span><input type="color" aria-label="Filament colour" id="col_0"><input type="text" aria-label="Filament name" id="colname_0">`;
+    const [pick, name] = row.querySelectorAll("input");
+    pick.value = col.hex; name.value = col.name;
+    pick.addEventListener("input", () => { col.hex = pick.value; redraw(); updateLegend(); save(); });
+    name.addEventListener("change", () => { col.name = name.value || "Filament"; onGcode(); save(); });
+    c.appendChild(row);
+    $("f-colour").innerHTML = "";
   }
 
   function renderAll() {
-    renderImport(); renderTreatment(); renderMachine(); renderMaterial(); renderColours(); renderStitch(); renderPrint();
+    renderInput(); renderImport(); renderHalftone(); renderStitch(); renderPrint(); renderMachine(); renderMaterial(); renderColours();
     $("fileName").value = state.fileName || $("fileName").value;
   }
 
   // ---------------------------------------------------------------- pipeline
-  let src = null, srcName = "";
-  let grid = null, base = null, lv = null, lvCanvas = null, presentLevels = 0;
-  let fields = {}, pathCache = {}, growCache = {}, result = null, error = null, genToken = 0, stale = true;
+  // src: an image, or the rendered view of the 3D scan (a canvas)
+  let src = null, srcName = "", srcImage = null;
+  let grid = null, base = null, tone = null, hdots = null, hremoved = [];
+  let pathCache = null, result = null, error = null, genToken = 0, stale = true;
 
   const heightMm = () => (src ? (state.import.widthMm * src.height) / src.width : 0);
 
-  function setSource(img, name) {
+  function setSource(img, name, info) {
     src = img; srcName = name;
     $("imgName").textContent = name;
-    $("imgInfo").textContent = `${img.width} × ${img.height} px`;
+    $("imgInfo").textContent = info || `${img.width} × ${img.height} px`;
     $("thumb").src = img instanceof HTMLCanvasElement ? img.toDataURL("image/png") : img.src;
     $("thumb").hidden = false;
     $("emptyState").hidden = true;
     onSize();
+  }
+  function clearSource() {
+    src = null; srcImage = null; hdots = null; result = null; base = null;
+    $("thumb").hidden = true;
+    $("emptyState").hidden = false;
+    $("dimH").textContent = "–";
+    $("stats").hidden = true;
+    $("warnings").innerHTML = "";
+    if (state.input.mode !== "scan") $("scanView").hidden = true;
+    redraw();
   }
 
   function onSize() {
@@ -600,7 +466,7 @@
     g.drawImage(src, 0, 0, grid.w, grid.h);
     base = DH.raster.toGray(g.getImageData(0, 0, grid.w, grid.h));
     updateSizeLine();
-    onTreat();
+    onHalftone();
   }
 
   // Image tones after levels / contrast: lightness 0 (black) … 1 (white).
@@ -616,55 +482,17 @@
     return out;
   }
 
-  // Redo whichever image treatment is selected.
-  function onTreat() { if (state.treatment === "trace") onTrace(); else onHalftone(); }
-
-  // ---- halftone: dots straight from the image, no vectorizing
-  let tone = null, removed = null, hdots = null, hremoved = [];
+  // Halftone: dots straight from the source, no vectorizing.
   function onHalftone() {
-    if (state.treatment !== "halftone" || !base) return;
+    if (!base) return;
     tone = toneMap();
     const all = DH.halftone.dots(tone, state.printable.alphaMask ? base.alpha : null, grid.w, grid.h, grid.p, state.halftone);
     const f = DH.halftone.filter(all, state.printable.minWidthMm);
     hdots = f.dots; hremoved = f.removed;
-    lv = null; presentLevels = hdots.length ? 1 : 0;
-    lvCanvas = null;
     onPaths();
-    if (view === "treat") redraw();
+    if (view === "halftone") redraw();
   }
-
-  // ---- image trace: quick, so it simply reruns on every change
-  let traceRaf = 0;
-  function onTrace() {
-    if (state.treatment !== "trace") return;
-    hdots = null;
-    cancelAnimationFrame(traceRaf);
-    traceRaf = requestAnimationFrame(() => {
-      if (!base) return;
-      tone = toneMap();
-      const r = DH.trace.traceMap(Object.assign({}, base, { gray: tone }), Object.assign({}, state.trace, { alphaMask: state.printable.alphaMask }), grid.p);
-      traced = r.swatches;
-      renderTracedColours();
-      applyLevels(r.lv);
-    });
-  }
-
-  // The printability filter changed: redo the treatment (both are quick).
-  function onLevels() { onTreat(); }
-  // Traced height levels → printability filter → toolpaths.
-  function applyLevels(raw) {
-    const N = levelCount();
-    const f = DH.printability.filter(raw, grid.w, grid.h, N, grid.p, state.printable);
-    lv = f.lv; removed = f.removed;
-    const counts = DH.raster.levelStats(lv, N);
-    presentLevels = 0;
-    for (let k = 1; k <= N; k++) if (counts.slice(k).some((n) => n > 0)) presentLevels = k;
-    lvCanvas = null;
-    fields = {}; growCache = {};
-    onPaths();
-    if (view === "treat") redraw();
-  }
-  function onPaths() { pathCache = {}; onGcode(); }
+  function onPaths() { pathCache = null; onGcode(); }
   let genTimer = 0;
   function onGcode() {
     stale = true;
@@ -672,13 +500,39 @@
     genTimer = setTimeout(() => generate(), 350);
   }
 
+  // ---- 3D scan input: the current view of the model is the source
+  function scanReady() { return !!(DH.scan3d && DH.scan3d.loaded); }
+  function updateFromScan() {
+    if (state.input.mode !== "scan" || !scanReady()) return;
+    const c = DH.scan3d.renderSource(1200);
+    if (!c) { toast("The model is out of view: reset the view."); return; }
+    setSource(c, srcName || "3D scan", `${c.width} × ${c.height} px rendered from the current view · ${state.input.lighting === "lit" ? "lit" : "texture only"}`);
+  }
+  async function loadScan(file) {
+    if (!/\.glb$/i.test(file.name)) { toast("Choose a .glb file (a binary glTF, as Polycam exports)."); return; }
+    if (!DH.scan3d) { toast("The 3D viewer is still loading; try again in a moment."); return; }
+    state.input.mode = "scan"; renderInput(); save();
+    setView("source");
+    try {
+      srcName = file.name;
+      await DH.scan3d.load(file, $("scanView"));
+      DH.scan3d.setLighting(state.input.lighting);
+      DH.scan3d.onRelease(updateFromScan);
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      updateFromScan();
+      $("fileName").value = safeName(file.name.replace(/\.[^.]+$/, "")); save();
+    } catch (e) {
+      console.error(e);
+      toast("That 3D scan couldn't be read: " + (e.message || e));
+    }
+  }
+
   const tick = () => new Promise((r) => setTimeout(r, 0));
 
   function printSettings() {
     const p = state.print;
     return Object.assign({}, p, {
-      nozzle: state.machine.nozzle, bedType: state.machine.bedType, skipLeveling: state.machine.skipLeveling,
-      simplify: state.treatment === "trace" ? DH.trace.simplifyFor(state.trace.paths) : state.printable.simplify, colourChanges: state.colourChanges,
+      nozzle: state.machine.nozzle, bedType: state.machine.bedType, skipLeveling: state.machine.skipLeveling, colourChanges: false,
     });
   }
 
@@ -687,111 +541,32 @@
     return { x0: pr.bed[0] / 2 + state.import.offX - W / 2, y0: pr.bed[1] / 2 + state.import.offY - H / 2, W, H };
   }
 
-  // Preview frame while a coral line grows: the bed, the layers already built,
-  // and the growing line(s) in this level's colour.
-  function drawGrowth(lines, k, built) {
-    if (view !== "paths") return;
-    const pr = printer(), pl = placement();
-    const toBed = ([x, y]) => [pl.x0 + (state.import.mirror ? pl.W - x : x), pl.y0 + y];
-    DH.preview.growth($("view"), {
-      bed: pr.bed, exclude: pr.excludeArea, box: [pl.x0, pl.y0, pl.x0 + pl.W, pl.y0 + pl.H], frame: frameGeom(),
-      wholeBed: $("wholeBed").checked, lines: lines.map((L) => L.map(toBed)), colour: state.colours[k - 1].hex,
-      under: built.map((L) => ({ paths: L.paths, colour: state.colours[L.colour].hex })),
-    });
-  }
-
-  // Halftone dots on the bed, ready for the G-code writer.
-  function halftonePaths() {
+  // The halftone dots on the bed as printable paths.
+  //   dots:  single Dot paths, ordered nearest-neighbour by the G-code writer
+  //   coral: serpentine chains along the grid rows; each chain is one Coral path
+  //          (a dot at every point, a thread between them), kept in that order
+  function dotPaths() {
     const pl = placement(), d = state.dotprint;
     const dot = { h: d.height, flow: d.flow, dwell: d.dwell, retract: d.retract, lift: d.lift, correction: d.correction };
-    return hdots.map((q) => ({ pts: [[pl.x0 + (state.import.mirror ? pl.W - q.x : q.x), pl.y0 + q.y]], closed: false, type: "Dot", d: q.d, dot }));
-  }
-
-  async function buildLayers(token) {
-    const pl = placement(), s = printSettings();
-    const layers = [];
-    const L = Math.max(1, Math.round(s.layersPerLevel));
-    if (state.treatment === "halftone") {
-      // the same dots on every layer, so they stack
-      if (!pathCache.halftone) pathCache.halftone = halftonePaths();
-      for (let r = 0; r < L; r++) layers.push({ colour: 0, paths: pathCache.halftone });
-      return layers;
-    }
-    for (let k = 1; k <= presentLevels; k++) {
-      if (!fields[k]) {
-        fields[k] = DH.raster.levelField(lv, grid.w, grid.h, k, grid.p);
-        if (fields[k]) fields[k].tone = tone; // for dots and coral that follow the picture's tones
-        await tick();
-        if (token !== genToken) return null;
-      }
-      const st = state.stitchSame ? state.stitches[0] : state.stitches[k - 1];
-      for (let r = 0; r < L; r++) {
-        const j = (k - 1) * L + r;
-        const ang = ((j * (st.rotate || 0)) % 360 + 360) % 360;
-        const key = st.pattern === "coral" ? k + "|coral" : k + "|" + ang; // a coral line is the same on every layer
-        const gkey = k + "|" + JSON.stringify(DH.stitches.coralOptions(st));
-        // When the level below is also Coral with the same growth settings, reuse
-        // its line, keeping only the parts inside this level: the knots then land
-        // exactly on the knots below and stack into columns.
-        const stOf = (q) => (state.stitchSame ? state.stitches[0] : state.stitches[q - 1]);
-        let root = k;
-        while (root > 1 && stOf(root - 1).pattern === "coral" && JSON.stringify(DH.stitches.coralOptions(stOf(root - 1))) === JSON.stringify(DH.stitches.coralOptions(st))) root--;
-        if (st.pattern === "coral" && root < k && !growCache[gkey] && fields[k]) {
-          const rootKey = root + "|" + JSON.stringify(DH.stitches.coralOptions(st));
-          if (growCache[rootKey]) growCache[gkey] = DH.coral.clip(growCache[rootKey], fields[k], st.dotSize / 2);
-        }
-        if (!pathCache[key] && st.pattern === "coral" && fields[k] && !growCache[gkey]) {
-          // Grow step by step so the preview can show the line growing.
-          const g = DH.coral.grower(fields[k], DH.stitches.coralOptions(st));
-          let last = 0;
-          while (!g.done()) {
-            g.step(4);
-            if (token !== genToken) return null;
-            const now = performance.now();
-            if (now - last > 50) {
-              last = now;
-              $("busy").textContent = `growing coral: level ${k}, step ${g.stepCount}/${g.total}`;
-              drawGrowth(g.lines, k, layers);
-            }
-            await tick();
-          }
-          $("busy").textContent = "computing toolpaths…";
-          growCache[gkey] = g.result();
-        }
-        if (!pathCache[key] && st.pattern === "coral" && growCache[gkey]) {
-          // Print settings (flows, pause, retraction…) only re-map the grown line.
-          pathCache[key] = DH.stitches.coralPaths(growCache[gkey], st).map((p) => Object.assign(p, {
-            pts: p.pts.map(([x, y]) => [pl.x0 + (state.import.mirror ? pl.W - x : x), pl.y0 + y]),
-          }));
-        }
-        if (!pathCache[key]) {
-          const raw = fields[k] ? DH.stitches.pathsForLayer(fields[k], st, s, ang) : [];
-          pathCache[key] = raw.map((p) => ({
-            closed: p.closed, type: p.type, d: p.d, dot: p.dot, keepOrder: p.keepOrder, knots: p.knots, coral: p.coral,
-            pts: p.pts.map(([x, y]) => [pl.x0 + (state.import.mirror ? pl.W - x : x), pl.y0 + y]),
-          }));
-          await tick();
-          if (token !== genToken) return null;
-        }
-        layers.push({ colour: k - 1, paths: pathCache[key] });
-      }
-    }
-    return layers;
+    const bed = (q) => [pl.x0 + (state.import.mirror ? pl.W - q.x : q.x), pl.y0 + q.y];
+    if (state.stitch.mode !== "coral") return hdots.map((q) => ({ pts: [bed(q)], closed: false, type: "Dot", d: q.d, dot }));
+    return DH.halftone.coralChains(hdots, state.stitch.maxThread).map((chain) => (chain.length === 1
+      ? { pts: [bed(chain[0])], closed: false, type: "Dot", d: chain[0].d, dot, keepOrder: true }
+      : { pts: chain.map(bed), ds: chain.map((q) => q.d), knots: chain.map(() => 1), d: chain[0].d, closed: false, type: "Coral", dot,
+          coral: { threadFlow: state.stitch.threadFlow }, keepOrder: true }));
   }
 
   async function generate() {
     const token = ++genToken;
-    if (state.treatment === "halftone" ? !hdots : !lv) return;
+    if (!hdots) return;
     $("busy").hidden = false;
     await tick();
     try {
-      const layers = await buildLayers(token);
-      if (!layers || token !== genToken) return;
-      const pr = printer();
-      result = DH.gcode.build({
-        name: srcName, printer: pr, material: state.material, print: printSettings(), layers,
-        colours: state.colours, frame: frameGeom(),
-      });
+      if (!pathCache) pathCache = dotPaths();
+      const L = Math.max(1, Math.round(state.print.layersPerLevel));
+      const layers = Array.from({ length: L }, () => ({ colour: 0, paths: pathCache })); // the same dots on every layer, so they stack
+      if (token !== genToken) return;
+      result = DH.gcode.build({ name: srcName, printer: printer(), material: state.material, print: printSettings(), layers, colours: state.colours, frame: frameGeom() });
       result.layers = layers;
       result.box = layers.length ? DH.gcode.bbox(layers) : null;
       error = null;
@@ -819,20 +594,19 @@
 
   function redraw() {
     const canvas = $("view");
-    $("pathControls").hidden = view !== "paths";
-    $("legend").hidden = view === "original";
+    // the 3D viewport replaces the canvas on the source tab for scans
+    const scanShown = view === "source" && state.input.mode === "scan" && scanReady();
+    $("scanView").hidden = !scanShown;
+    if (scanShown && DH.scan3d) DH.scan3d.mount($("scanView"));
+    canvas.hidden = scanShown;
+    $("pathControls").hidden = view !== "paths" || showCalib;
+    $("legend").hidden = view === "source";
+    if (view === "paths" && showCalib) { drawCalibration(); return; }
     if (!src) { const g = canvas.getContext("2d"); g.clearRect(0, 0, canvas.width, canvas.height); return; }
-    if (view === "original") { DH.preview.fitImage(canvas, src, 14); return; }
-    if (view === "calibration") { drawCalibration(); return; }
-    if (view === "treat" && state.treatment === "halftone") {
+    if (view === "source") { if (!scanShown) DH.preview.fitImage(canvas, src, 14); return; }
+    if (view === "halftone") {
       if (!hdots) return;
       DH.preview.fitImage(canvas, DH.preview.dotsCanvas(hdots, hremoved, grid.w * grid.p, grid.h * grid.p, state.colours[0].hex), 14);
-      return;
-    }
-    if (view === "treat") {
-      if (!lv) return;
-      if (!lvCanvas) lvCanvas = DH.preview.levelCanvas(lv, grid.w, grid.h, state.colours, removed);
-      DH.preview.fitImage(canvas, lvCanvas, 14);
       return;
     }
     const pr = printer(), pl = placement();
@@ -847,25 +621,21 @@
     const n = result ? result.preview.length : 0, j = +$("layerSlider").value;
     if (!n) { $("layerLabel").textContent = "–"; return; }
     const L = result.preview[j - 1];
-    $("layerLabel").textContent = `${j}/${n} · Z ${L.z.toFixed(2)} · ${state.colours[L.colour].name}`;
+    $("layerLabel").textContent = `${j}/${n} · Z ${L.z.toFixed(2)}`;
   }
 
   function updateLegend() {
     const el = $("legend");
     el.innerHTML = "";
     const add = (html) => { const s = document.createElement("span"); s.innerHTML = html; el.appendChild(s); };
+    if (view === "paths" && showCalib) { add("dot calibration: number · intended diameter (printed with size correction 1×) · click a tab to go back"); return; }
     if (view === "paths" && $("colourByLayer").checked) {
       add(`<i style="background:${DH.preview.layerHue(0, 2)}"></i>first layer`);
       add(`<i style="background:${DH.preview.layerHue(1, 2)}"></i>last layer`);
-    } else {
-      for (let k = 0; k < levelCount(); k++) {
-        const c = state.colours[k];
-        add(`<i style="background:${c.hex}"></i>L${k + 1} ${escapeHtml(c.name)}`);
-      }
-    }
+    } else add(`<i style="background:${state.colours[0].hex};height:8px;width:8px;border-radius:50%"></i>dots (${escapeHtml(state.colours[0].name)})`);
+    if (view === "paths" && state.stitch.mode === "coral") add(`<i style="background:${state.colours[0].hex};height:1px"></i>coral thread`);
     if (view === "paths" && $("showTravel").checked) add(`<i class="travel"></i>travel (current layer)`);
-    if (view === "treat") add(`<i style="background:repeating-linear-gradient(45deg,#d62828 0 2px,#f5cdcd 2px 4px);height:8px"></i>removed by the printability filter`);
-    if (view === "calibration") { el.innerHTML = ""; add("dot calibration: number · intended diameter (printed with size correction 1×)"); }
+    if (view === "halftone") add(`<i style="background:#d62828;height:8px;width:8px;border-radius:50%"></i>removed by the printability filter`);
   }
   const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -880,24 +650,15 @@
     el.hidden = !result;
     if (!result) return;
     const s = result.stats, pl = placement();
-    const add = (k, v, swatch) => {
-      const span = document.createElement("span");
-      span.innerHTML = `[ ${swatch ? `<i class="swatch" style="background:${swatch}"></i>` : ""}${k}: ${v} ]`;
-      el.appendChild(span);
-    };
-    const topZ = state.print.firstLayerZ + state.print.zOffset + Math.max(0, s.layers - 1) * state.print.layerHeight;
+    const add = (k, v) => { const span = document.createElement("span"); span.innerHTML = `[ ${k}: ${v} ]`; el.appendChild(span); };
     add("printer", escapeHtml(printer().name.toLowerCase()));
     add("size", `${pl.W.toFixed(0)} × ${pl.H.toFixed(1)} mm`);
-    add("levels", presentLevels);
-    add("layers", `${s.layers} · top z ${topZ.toFixed(2)}`);
+    add("stitch", state.stitch.mode);
+    add("dots", (s.dots + s.knots).toLocaleString("en"));
+    if (s.knots) add("threads", (result.layers[0].paths.filter((p) => p.type === "Coral").length).toLocaleString("en"));
+    add("layers", s.layers);
     add("time", fmtTime(s.time) + " + start");
     add("filament", `${(s.filamentMm / 1000).toFixed(2)} m · ${s.filamentG.toFixed(1)} g`);
-    for (const k of Object.keys(s.perColour)) {
-      const pc = s.perColour[k], c = state.colours[pc.colour];
-      add(escapeHtml(c.name.toLowerCase()), `${pc.grams.toFixed(1)} g`, c.hex);
-    }
-    if (s.dots) add("dots", s.dots.toLocaleString("en"));
-    if (s.knots) add("knots", s.knots.toLocaleString("en"));
     add("pauses", s.pauses.length);
   }
 
@@ -906,20 +667,20 @@
     ul.innerHTML = "";
     const add = (cls, text) => { const li = document.createElement("li"); if (cls) li.className = cls; li.textContent = text; ul.appendChild(li); };
     if (error) { add("bad", "G-code could not be written: " + error); return; }
-    const pr = printer(), pl = placement(), s = state.print, m = state.material;
+    const pr = printer(), pl = placement(), s = state.print;
     if (pl.x0 < 0 || pl.y0 < 0 || pl.x0 + pl.W > pr.bed[0] || pl.y0 + pl.H > pr.bed[1])
       add("bad", `The design (${pl.W.toFixed(0)} × ${pl.H.toFixed(0)} mm) runs off the ${pr.name} bed (${pr.bed[0]} × ${pr.bed[1]} mm). Reduce the width or the offsets.`);
     if (pr.excludeArea) {
       const [a, b, c, d] = pr.excludeArea;
       if (pl.x0 < c && pl.x0 + pl.W > a && pl.y0 < d && pl.y0 + pl.H > b) add("", "The design overlaps the printer's excluded corner (the purge chute area).");
     }
-    if (!presentLevels || (result && !result.stats.extrudeLen && !result.stats.dots && !result.stats.knots)) add("bad", "Nothing to print: change the pattern, lower the image influence, or relax the printability filter.");
+    if (hdots && !hdots.length) add("bad", "Nothing to print: every dot is under the minimum size. Lower the minimum dot diameter or the smallest printable dot, or adjust the levels.");
     const z1 = s.firstLayerZ + s.zOffset;
-    if (z1 < s.layerHeight * 0.5) add("info", `Layer 1 prints with the nozzle at Z ${z1.toFixed(2)} mm. That's meant for fabric; on a bare plate the nozzle would block. Set Z offset to your fabric's compressed thickness if needed.`);
-    const noz = state.machine.nozzle;
-    if (s.lineWidth < noz * 0.85 || s.lineWidth > noz * 1.7) add("", `A ${s.lineWidth} mm line width is unusual for a ${noz} mm nozzle (try ${(noz * 1.125).toFixed(2)} mm).`);
-    const cap = m.maxVolSpeed / (s.lineWidth * s.layerHeight);
-    if (cap < s.speed) add("info", `${m.name} max volumetric speed limits printing to ${cap.toFixed(0)} mm/s.`);
+    if (z1 < 0.05) add("info", `Layer 1 prints with the nozzle at Z ${z1.toFixed(2)} mm. That's meant for fabric. Set Z offset to your fabric's compressed thickness if needed.`);
+    if (DH.halftone.merges(state.halftone))
+      add("", `Grid spacing (${state.halftone.spacing} mm) is smaller than the largest dot (${Math.min(DH.halftone.MAX_DOT, state.halftone.maxD)} mm): dark dots will merge.`);
+    if (state.stitch.mode === "coral" && state.stitch.maxThread < state.halftone.spacing)
+      add("", `Max thread length (${state.stitch.maxThread} mm) is shorter than the grid spacing (${state.halftone.spacing} mm), so every thread breaks: this prints like dots.`);
     if (result && result.stats.pauses.length) {
       const list = result.stats.pauses.map((p) => `layer ${p.layer} (${p.why})`).join("; ");
       add("info", `The print pauses ${result.stats.pauses.length}× with M400 U1: ${list}.`);
@@ -929,8 +690,6 @@
     if (fp) add("bad", fp);
     if (state.frame.enabled && !state.frame.pauseToPlace)
       add("", "The printer's start routine (purge line, calibration, leveling) moves low across the plate and could hit magnets that are already on. Lay the fabric and magnets after it, or turn on the pause.");
-    if (state.treatment === "halftone" && DH.halftone.merges(state.halftone))
-      add("", `Grid spacing (${state.halftone.spacing} mm) is smaller than the largest dot (${Math.min(DH.halftone.MAX_DOT, state.halftone.maxD)} mm): dark dots will merge.`);
     if (pr.multiNozzle) add("info", `${pr.name}: dual-nozzle start G-code is filled for one filament on one nozzle. Print the test square before a real job.`);
     if (state.machine.skipLeveling && result && !result.stats.levelingRemoved) add("", "No bed-leveling block was found in this printer's start G-code; nothing was removed.");
   }
@@ -952,8 +711,8 @@
 
   async function exportGcode() {
     if (stale) { clearTimeout(genTimer); await generate(); }
-    if (!result) { toast(error ? "Fix the error shown in the preview panel first." : (src ? "Nothing to export yet." : "Load an image first.")); return; }
-    if (!result.stats.extrudeLen && !result.stats.dots && !result.stats.knots) { toast("Nothing to print: adjust the halftone or trace settings, or the printability filter."); return; }
+    if (!result) { toast(error ? "Fix the error shown in the preview panel first." : (src ? "Nothing to export yet." : "Import an image or a 3D scan first.")); return; }
+    if (!result.stats.dots && !result.stats.knots) { toast("Nothing to print: adjust the halftone settings."); return; }
     const fp = frameProblem(result.box);
     if (fp) { toast("Not exported: " + fp); return; }
     const name = safeName($("fileName").value) + ".gcode";
@@ -962,8 +721,13 @@
   }
 
   function setView(v) {
-    view = v;
+    view = v; showCalib = false;
     $("viewTabs").querySelectorAll("button").forEach((x) => x.setAttribute("aria-selected", String(x.dataset.view === v)));
+    updateLegend(); redraw();
+  }
+  function showCalibration() {
+    setView("paths");
+    showCalib = true;
     updateLegend(); redraw();
   }
 
@@ -976,13 +740,13 @@
     const fp = frameProblem([row[0].x - 2, row[0].y - 2, row[row.length - 1].x + 2, row[0].y + 2]);
     if (fp) { toast("Not exported: " + fp); return; }
     const paths = row.map((c) => ({ pts: [[c.x, c.y]], closed: false, type: "Dot", d: c.d, dot, keepOrder: true }));
-    const s = Object.assign(printSettings(), { pauseLayer: 0, colourChanges: false, layersPerLevel: 1 });
+    const s = Object.assign(printSettings(), { pauseLayer: 0, layersPerLevel: 1 });
     try {
       const r = DH.gcode.build({ name: "dot calibration", printer: pr, material: state.material, print: s, layers: [{ colour: 0, paths }], colours: state.colours, frame: frameGeom() });
       const name = `dot_calibration_${pr.id}_${state.material.type.toLowerCase()}.gcode`;
       download(name, r.text);
       toast(`Saved ${name}`);
-      setView("calibration");
+      showCalibration();
     } catch (e) { toast("Dot calibration failed: " + e.message); }
   }
   // One measured dot → size correction = intended ÷ measured diameter.
@@ -997,7 +761,7 @@
 
   function exportTestSquare() {
     const pr = printer();
-    const s = Object.assign(printSettings(), { firstLayerZ: state.print.layerHeight, zOffset: 0, pauseLayer: 0, colourChanges: false });
+    const s = Object.assign(printSettings(), { firstLayerZ: state.print.layerHeight, zOffset: 0, pauseLayer: 0 });
     const c = [pr.bed[0] / 2, pr.bed[1] / 2], fp = frameProblem([c[0] - 10, c[1] - 10, c[0] + 10, c[1] + 10]);
     if (fp) { toast("Not exported: " + fp); return; }
     try {
@@ -1017,7 +781,7 @@
   function savePreset() {
     state.fileName = $("fileName").value;
     const name = safeName($("fileName").value) + ".json";
-    download(name, JSON.stringify({ app: "digital-harvest-stitch", version: 1, settings: state }, null, 2), "application/json");
+    download(name, JSON.stringify({ app: "digital-harvest-stitch", version: 2, settings: state }, null, 2), "application/json");
     toast(`Saved preset ${name}`);
   }
   function readJson(file, then) {
@@ -1028,9 +792,10 @@
   function loadPreset(file) {
     readJson(file, (j) => {
       const s = j.settings || j;
-      if (!s.print || !s.stitches) { toast("That JSON isn't a Digital Harvest preset."); return; }
+      if (!s.print || !s.machine) { toast("That JSON isn't a Digital Harvest preset."); return; }
+      const mode = state.input.mode;
       state = normalize(merge(clone(DEFAULTS), s));
-      levelTab = 0;
+      state.input.mode = mode; // a preset doesn't switch away from what is imported
       renderAll(); onSize(); save();
       toast(`Loaded preset ${file.name}`);
     });
@@ -1057,30 +822,37 @@
     });
   }
 
-  // ---------------------------------------------------------------- image input
-  function loadFile(file) {
-    if (!file || !/^image\//.test(file.type)) { toast("Choose a PNG or JPG image."); return; }
+  // ---------------------------------------------------------------- input files
+  function loadImage(file) {
+    if (!file || !/\.(png|jpe?g)$/i.test(file.name) && !/^image\/(png|jpeg)$/.test(file.type)) { toast("Choose a PNG or JPG image."); return; }
     const img = new Image();
     img.onload = () => {
+      state.input.mode = "image"; renderInput(); $("scanView").hidden = true;
+      srcImage = img;
       setSource(img, file.name);
-      const stem = file.name.replace(/\.[^.]+$/, "");
-      $("fileName").value = safeName(stem); save();
+      $("fileName").value = safeName(file.name.replace(/\.[^.]+$/, "")); save();
     };
     img.onerror = () => toast("That image couldn't be read.");
     img.src = URL.createObjectURL(file);
+  }
+  function loadAny(file) {
+    if (!file) return;
+    if (/\.glb$/i.test(file.name)) loadScan(file); else loadImage(file);
   }
 
   // ---------------------------------------------------------------- wire up
   function init() {
     renderAll();
-    $("imgFile").addEventListener("change", (e) => loadFile(e.target.files[0]));
-    $("useSample").addEventListener("click", () => setSource(DH.sampleCanvas(), "Sample: fern UV texture"));
+    $("imgFile").addEventListener("change", (e) => { loadImage(e.target.files[0]); e.target.value = ""; });
+    $("scanFile").addEventListener("change", (e) => { if (e.target.files[0]) loadScan(e.target.files[0]); e.target.value = ""; });
+    $("useSample").addEventListener("click", () => { state.input.mode = "image"; renderInput(); srcName = "Sample: fern UV texture"; setSource(DH.sampleCanvas(), srcName); });
+    $("resetView").addEventListener("click", () => DH.scan3d && DH.scan3d.resetView());
     const drop = $("drop");
     ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
     ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
-    drop.addEventListener("drop", (e) => loadFile(e.dataTransfer.files[0]));
+    drop.addEventListener("drop", (e) => loadAny(e.dataTransfer.files[0]));
     window.addEventListener("dragover", (e) => e.preventDefault());
-    window.addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); });
+    window.addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer.files[0]) loadAny(e.dataTransfer.files[0]); });
 
     $("viewTabs").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
     $("layerSlider").addEventListener("input", () => { updateLayerLabel(); redraw(); });
@@ -1093,20 +865,19 @@
     $("materialFile").addEventListener("change", (e) => { if (e.target.files[0]) loadMaterial(e.target.files[0]); e.target.value = ""; });
     $("fileName").addEventListener("change", save);
     $("exportCalib").addEventListener("click", exportCalibration);
-    $("showCalib").addEventListener("click", () => setView("calibration"));
+    $("showCalib").addEventListener("click", showCalibration);
     $("calibApply").addEventListener("click", applyCalibration);
-    $("useTraced").addEventListener("click", useTracedColours);
     $("dimWidth").addEventListener("input", () => { state.import.widthMm = +$("dimWidth").value; onSize(); save(); });
     new ResizeObserver(() => redraw()).observe($("canvasWrap"));
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw);
 
-    // Start empty: nothing is shown until an image is loaded (or the sample is picked).
+    // Start empty: nothing is shown until something is imported (or the sample is picked).
     $("thumb").hidden = true;
     $("dimH").textContent = "–";
     redraw();
   }
 
-  // Exposed for debugging in the console.
-  DH.app = { get state() { return state; }, get result() { return result; }, generate };
+  // Exposed for debugging and tests in the console.
+  DH.app = { get state() { return state; }, get result() { return result; }, get dots() { return hdots; }, generate };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init); else init();
 })(globalThis.DH = globalThis.DH || {});

@@ -42,7 +42,9 @@
     let row = 0;
     for (let v = -R; v <= R; v += rowStep, row++) {
       const shift = hex && row % 2 ? sp / 2 : 0;
+      let col = -1;
       for (let u = -R + shift; u <= R; u += sp) {
+        col++;
         const x = cx + u * ca - v * sa, y = cy + u * sa + v * ca;
         if (x < 0 || y < 0 || x > Wmm || y > Hmm) continue;
         // the cell: a square of one spacing around the dot, in pixels (y down)
@@ -55,10 +57,30 @@
         const dk = Math.min(1, Math.max(0, box(I, x0, y0, x1, y1) / n));
         const d = maxD * Math.sqrt(dk);
         if (d < minD || d <= 0) continue;
-        out.push({ x, y, d });
+        out.push({ x, y, d, row, col });
       }
     }
     return out;
+  }
+
+  // Coral order: a serpentine along the grid rows (left to right, then right to
+  // left on the next row …). Consecutive dots are neighbours in a row, or the
+  // ends of two neighbouring rows, so the threads between them never cross.
+  // Where the next dot is further than maxThread, the thread breaks and a new
+  // chain starts. Returns chains: arrays of dots in printing order.
+  function serpentine(list) {
+    return list.slice().sort((a, b) => a.row - b.row || (a.row % 2 ? b.col - a.col : a.col - b.col));
+  }
+  function coralChains(list, maxThread) {
+    const order = serpentine(list), chains = [];
+    let cur = [];
+    for (const q of order) {
+      const last = cur[cur.length - 1];
+      if (last && Math.hypot(q.x - last.x, q.y - last.y) > maxThread + 1e-9) { chains.push(cur); cur = []; }
+      cur.push(q);
+    }
+    if (cur.length) chains.push(cur);
+    return chains;
   }
 
   // Dots closer than their diameters will merge into each other.
@@ -83,5 +105,5 @@
     }));
   }
 
-  DH.halftone = { dots, merges, filter, calibration, MAX_DOT };
+  DH.halftone = { dots, merges, filter, calibration, serpentine, coralChains, MAX_DOT };
 })(globalThis.DH = globalThis.DH || {});

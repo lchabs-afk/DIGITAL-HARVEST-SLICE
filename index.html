@@ -5,7 +5,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Digital Harvest Stitch</title>
-<meta name="description" content="Turn a pressed UV texture into halftone dots or traced shapes and embroidery-style G-code for printing on textile with Bambu Lab printers.">
+<meta name="description" content="Turn a pressed UV texture or a 3D scan into halftone dots and dot or coral G-code for printing on textile with Bambu Lab printers.">
 <link rel="preload" href="fonts/Haskoy-variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/style.css">
 </head>
@@ -22,29 +22,34 @@
 
     <section class="panel" id="p-import">
       <h2><span class="num">01</span> Import</h2>
+      <div class="mode-switch" id="inputMode" role="group" aria-label="Input">
+        <button type="button" data-mode="image">image</button>
+        <button type="button" data-mode="scan">3D scan</button>
+      </div>
       <div class="drop" id="drop">
-        <img id="thumb" alt="Imported texture" hidden>
+        <img id="thumb" alt="Imported source" hidden>
         <div class="drop-text">
-          <strong id="imgName">No image yet</strong>
-          <span id="imgInfo">Drop a PNG or JPG exported from Blender's UV editor</span>
-          <div class="row-btns">
-            <label class="btn small" for="imgFile">Choose image</label>
-            <button class="btn small ghost" id="useSample" type="button">Use sample</button>
+          <strong id="imgName">Nothing imported yet</strong>
+          <span id="imgInfo">Drop a PNG or JPG</span>
+          <div class="row-btns" id="imageBtns">
+            <label class="btn small" for="imgFile">choose image</label>
+            <button class="btn small ghost" id="useSample" type="button">use sample</button>
+          </div>
+          <div class="row-btns" id="scanBtns" hidden>
+            <label class="btn small" for="scanFile">choose 3D scan (.glb)</label>
           </div>
         </div>
-        <input type="file" id="imgFile" accept="image/png,image/jpeg,image/webp" hidden>
+        <input type="file" id="imgFile" accept="image/png,image/jpeg,.png,.jpg,.jpeg" hidden>
+        <input type="file" id="scanFile" accept=".glb,model/gltf-binary" hidden>
       </div>
+      <div class="fields" id="f-scan" hidden></div>
       <div class="fields" id="f-import"></div>
     </section>
 
     <section class="panel" id="p-treat">
-      <h2><span class="num">02</span> Image treatment</h2>
-      <div class="mode-switch" id="treatMode" role="group" aria-label="Image treatment">
-        <button type="button" data-mode="halftone">halftone</button>
-        <button type="button" data-mode="trace">image trace</button>
-      </div>
+      <h2><span class="num">02</span> Halftone</h2>
       <div id="halftoneBox">
-        <p class="hint">Samples the image on a grid; each cell becomes a dot whose size follows the darkness there. Dots are printed directly, with no outlines or stitches.</p>
+        <p class="hint">Samples the image on a grid; each cell becomes a dot whose size follows the darkness there.</p>
         <div class="fields" id="f-halftone"></div>
         <h3>Dot printing</h3>
         <div class="fields" id="f-dotprint"></div>
@@ -62,15 +67,6 @@
           <button class="btn small" id="calibApply" type="button">set correction</button>
         </div>
       </div>
-      <div id="traceBox" hidden>
-        <p class="hint">Like Illustrator's Image Trace: groups the picture into a few flat tones or colours with crisp edges. Each one becomes a height level.</p>
-        <div class="fields" id="f-trace"></div>
-        <div class="traced" id="tracedColours">
-          <h3>Traced colours</h3>
-          <div class="traced-swatches" id="tracedSwatches"></div>
-          <button class="btn small" id="useTraced" type="button">use as filament colours</button>
-        </div>
-      </div>
       <h3>Image</h3>
       <div class="fields" id="f-tone"></div>
       <h3>Printability</h3>
@@ -79,10 +75,8 @@
 
     <section class="panel" id="p-stitch">
       <h2><span class="num">03</span> Stitch &amp; print</h2>
-      <div class="fields" id="f-stitch-mode"></div>
-      <div class="tabs level-tabs" id="levelTabs" role="tablist"></div>
+      <p class="hint">Both modes print the halftone dots as stationary blobs, each sized from its halftone diameter.</p>
       <div class="fields" id="f-stitch"></div>
-      <p class="hint" id="stitchNote" hidden>Halftone prints its dots directly, so stitch patterns don't apply. The print settings below still do.</p>
       <h3>Print</h3>
       <div class="fields" id="f-print"></div>
     </section>
@@ -97,7 +91,7 @@
         <label class="btn small ghost" for="materialFile">Load material</label>
         <input type="file" id="materialFile" accept=".json,application/json" hidden>
       </div>
-      <h3>Colour per height level</h3>
+      <h3>Filament colour</h3>
       <div id="colours" class="colours"></div>
       <div class="fields" id="f-colour"></div>
       <div class="test-square">
@@ -114,10 +108,9 @@
       <div class="viewer-head">
         <h2><span class="num">05</span> Preview &amp; export</h2>
         <div class="tabs" id="viewTabs" role="tablist">
-          <button type="button" role="tab" data-view="original">Original</button>
-          <button type="button" role="tab" data-view="treat">halftone</button>
-          <button type="button" role="tab" data-view="calibration" hidden>calibration</button>
-          <button type="button" role="tab" data-view="paths" aria-selected="true">Toolpaths</button>
+          <button type="button" role="tab" data-view="source">source</button>
+          <button type="button" role="tab" data-view="halftone">halftone</button>
+          <button type="button" role="tab" data-view="paths" aria-selected="true">toolpaths</button>
         </div>
       </div>
       <div class="frame">
@@ -130,13 +123,15 @@
           <span class="dim-line" aria-hidden="true"></span>
         </div>
         <div class="hoop">
-          <span class="corner tl" aria-hidden="true"></span><span class="corner tr" aria-hidden="true"></span>
-          <span class="corner bl" aria-hidden="true"></span><span class="corner br" aria-hidden="true"></span>
           <div class="canvas-wrap" id="canvasWrap">
             <canvas id="view"></canvas>
+            <div class="scan-view" id="scanView" hidden>
+              <button class="btn small scan-reset" id="resetView" type="button">reset view</button>
+              <p class="scan-help">drag to rotate · scroll to zoom · right-drag to pan. The halftone updates when you let go.</p>
+            </div>
             <div class="empty" id="emptyState">
               <p>[ no image ]</p>
-              <p>drop a png or jpg exported from blender's uv editor, or choose one in [01] import</p>
+              <p>drop a png or jpg, or a .glb 3D scan, or choose one in [01] import</p>
             </div>
             <div class="busy" id="busy" hidden>computing toolpaths…</div>
           </div>
@@ -174,16 +169,15 @@
 <script src="profiles/printers.js"></script>
 <script src="profiles/materials.js"></script>
 <script src="js/template.js"></script>
-<script src="js/geometry.js"></script>
 <script src="js/raster.js"></script>
 <script src="js/halftone.js"></script>
-<script src="js/trace.js"></script>
-<script src="js/printability.js"></script>
-<script src="js/coral.js"></script>
-<script src="js/stitches.js"></script>
 <script src="js/gcode.js"></script>
 <script src="js/sample.js"></script>
 <script src="js/preview.js"></script>
 <script src="js/app.js"></script>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.min.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
+<script type="module" src="js/scan3d.js"></script>
 </body>
 </html>

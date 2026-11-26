@@ -23,33 +23,6 @@
     g.drawImage(src, (w - dw) / 2, (h - dh) / 2, dw, dh);
   }
 
-  // Level map → small canvas, coloured by filament colour per level.
-  // `removed` (optional) marks pixels the printability filter took away: red hatching.
-  function levelCanvas(lv, w, h, colours, removed) {
-    const c = document.createElement("canvas");
-    c.width = w; c.height = h;
-    const g = c.getContext("2d");
-    const img = g.createImageData(w, h), d = img.data;
-    const rgb = colours.map((col) => {
-      const n = parseInt(col.hex.slice(1), 16);
-      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-    });
-    for (let i = 0; i < lv.length; i++) {
-      const k = lv[i];
-      if (removed && removed[i] && !k) {
-        // red diagonal hatching, so it can't be mistaken for a red filament
-        const x = i % w, y = (i / w) | 0, line = (x + y) % 8 < 4;
-        d[i * 4] = line ? 214 : 245; d[i * 4 + 1] = line ? 40 : 205; d[i * 4 + 2] = line ? 40 : 205; d[i * 4 + 3] = 255;
-        continue;
-      }
-      if (!k) continue;
-      const [r, gg, b] = rgb[k - 1] || [0, 0, 0];
-      d[i * 4] = r; d[i * 4 + 1] = gg; d[i * 4 + 2] = b; d[i * 4 + 3] = 255;
-    }
-    g.putImageData(img, 0, 0);
-    return c;
-  }
-
   function layerHue(j, n) {
     const t = n > 1 ? j / (n - 1) : 0;
     return "hsl(" + Math.round(210 - t * 200) + " 65% 45%)";
@@ -157,31 +130,6 @@
     return { g, X, Y, s, dpr, lw };
   }
 
-  // A frame of the coral growth animation: bed, layers already built (faint),
-  // and the growing lines with their points.
-  function growth(canvas, o) {
-    const v = toolpaths(canvas, { ...o, layers: [], current: 0, fit: o.box, lineWidth: 0.4 });
-    const { g, X, Y, dpr } = v;
-    g.lineCap = "round"; g.lineJoin = "round";
-    g.globalAlpha = 0.25;
-    for (const U of o.under || []) {
-      g.strokeStyle = U.colour; g.lineWidth = 1 * dpr;
-      g.beginPath();
-      for (const p of U.paths) p.pts.forEach(([x, y], i) => (i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))));
-      g.stroke();
-    }
-    g.globalAlpha = 1;
-    g.strokeStyle = o.colour; g.fillStyle = o.colour; g.lineWidth = 1.25 * dpr;
-    for (const L of o.lines) {
-      g.beginPath();
-      L.forEach(([x, y], i) => (i ? g.lineTo(X(x), Y(y)) : g.moveTo(X(x), Y(y))));
-      g.stroke();
-    }
-    g.beginPath();
-    for (const L of o.lines) for (const [x, y] of L) { g.moveTo(X(x) + 1.4 * dpr, Y(y)); g.arc(X(x), Y(y), 1.4 * dpr, 0, Math.PI * 2); }
-    g.fill();
-  }
-
   // Halftone dots at their real size on a canvas of the design (wMm × hMm),
   // with dots the printability filter removed drawn in red.
   function dotsCanvas(dots, removed, wMm, hMm, colour) {
@@ -217,5 +165,5 @@
     }
   }
 
-  DH.preview = { fitImage, levelCanvas, toolpaths, dotsCanvas, calibration, growth, layerHue };
+  DH.preview = { fitImage, toolpaths, dotsCanvas, calibration, layerHue };
 })(globalThis.DH = globalThis.DH || {});

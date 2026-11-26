@@ -1,6 +1,6 @@
-// node tests/run_tests.js — checks templates, geometry and G-code without a browser.
+// node tests/run_tests.js — checks templates, the halftone and G-code without a browser.
 const path = require("path");
-for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/geometry.js", "js/raster.js", "js/halftone.js", "js/trace.js", "js/printability.js", "js/coral.js", "js/stitches.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
+for (const f of ["profiles/printers.js", "profiles/materials.js", "js/template.js", "js/raster.js", "js/halftone.js", "js/gcode.js"]) require(path.join(__dirname, "..", f));
 const DH = globalThis.DH;
 let fails = 0;
 const ok = (cond, msg) => { if (!cond) { fails++; console.log("FAIL", msg); } else console.log("ok  ", msg); };
@@ -27,15 +27,6 @@ function synth(w, h) {
 }
 const grid = DH.raster.gridFor(60, 40);
 const base = DH.raster.toGray(synth(grid.w, grid.h));
-// The levels used by the stitch and G-code tests: synthetic leaf → image trace
-// (2 grays) → printability filter.
-const t0 = Date.now();
-const traced = DH.trace.traceMap(base, { mode: "gray", colours: 2, paths: 70, corners: 60, noiseMm: 0.8, ignoreWhite: true, darkHigh: true, alphaMask: true }, grid.p);
-const filt = DH.printability.filter(traced.lv, grid.w, grid.h, 2, grid.p, { minWidthMm: 0.5, minAreaMm2: 0.5 });
-const lv = filt.lv;
-const counts = DH.raster.levelStats(lv, 2);
-ok(counts[1] > 0 && counts[2] > 0, "two levels present after the printability filter " + JSON.stringify(counts));
-ok(lv[10 * grid.w + 10] === 0, "speck removed by noise");
 
 // ---- Halftone: dots straight from the image
 {
@@ -78,80 +69,75 @@ ok(lv[10 * grid.w + 10] === 0, "speck removed by noise");
     `halftone nearest-neighbour order: ${ord.length} dots, travel ${Math.round(travel(ord))} mm (minimum about ${floor} mm; ${Math.round(travel(shuffled))} mm unordered)`);
 }
 
-// Image trace (the other image treatment) on the same synthetic image, then
-// through the same printability filter.
-for (const mode of ["bw", "gray", "colour"]) {
-  const tr = DH.trace.traceMap(base, { mode, threshold: 128, colours: 3, paths: 60, corners: 50, noiseMm: 0.5, ignoreWhite: true, darkHigh: true, alphaMask: true }, grid.p);
-  const c = DH.raster.levelStats(tr.lv, tr.levels);
-  const f = DH.printability.filter(tr.lv, grid.w, grid.h, tr.levels, grid.p, { minWidthMm: 0.5, minAreaMm2: 0.5 });
-  const cf = DH.raster.levelStats(f.lv, tr.levels);
-  ok(tr.levels >= 1 && c.slice(1).some((n) => n > 0) && tr.swatches.length === tr.levels && cf.slice(1).some((n) => n > 0),
-    `image trace ${mode}: ${tr.levels} levels ${JSON.stringify(c)}, after printability ${JSON.stringify(cf)}`);
-}
 
-// Printability filter: a 0.3 mm line and a 0.2 mm² island go, a 5 mm blob stays.
-{
-  const p = 0.05, w = 300, h = 200, t = new Uint8Array(w * h);
-  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    const X = x * p, Y = y * p;
-    if (Math.hypot(X - 4, Y - 5) < 2.5) t[y * w + x] = 1;          // blob
-    if (X > 8 && X < 14 && Math.abs(Y - 5) < 0.15) t[y * w + x] = 1; // thin line
-    if (Math.hypot(X - 12, Y - 8) < 0.25) t[y * w + x] = 1;        // tiny island
-  }
-  const r = DH.printability.filter(t, w, h, 1, p, { minWidthMm: 0.5, minAreaMm2: 0.5 });
-  const at = (X, Y) => Math.round(Y / p) * w + Math.round(X / p);
-  ok(r.lv[at(4, 5)] === 1 && r.lv[at(11, 5)] === 0 && r.lv[at(12, 8)] === 0 && r.removed[at(11, 5)] === 1 && r.removed[at(12, 8)] === 1 && r.removed[at(4, 5)] === 0,
-    "printability: thin line and tiny island removed (and marked red), blob kept");
-}
-
-const print = { nozzle: 0.4, lineWidth: 0.45, layerHeight: 0.2, layersPerLevel: 2, firstLayerZ: 0.2, zOffset: 0, speed: 40, firstSpeed: 15, travelSpeed: 150, firstLayerFlow: 1.1, skipLeveling: true, pauseLayer: 0, bedType: "Textured PEI Plate", retractMinTravel: 2, zHop: 0.4, simplify: 0.03, colourChanges: true };
-const layers = [];
-const off = [100, 100];
-for (let k = 1; k <= 2; k++) {
-  const field = DH.raster.levelField(lv, grid.w, grid.h, k, grid.p);
-  for (const pattern of ["satin", "tatami", "contour", "running", "outline_fill"]) {
-    const paths = DH.stitches.pathsForLayer(field, { pattern, fill: "tatami", angle: 45, spacing: 0.45, outlinePasses: 1, dashed: pattern === "running", dashLen: 2, gapLen: 1 }, print, 0);
-    ok(paths.length > 0, `level ${k} ${pattern}: ${paths.length} paths`);
-  }
-  const paths = DH.stitches.pathsForLayer(field, { pattern: "outline_fill", fill: "satin", angle: 30, spacing: 0.45, outlinePasses: 1 }, print, 0);
-  for (let r = 0; r < 2; r++) layers.push({ colour: k - 1, paths: paths.map((p) => ({ ...p, pts: p.pts.map(([x, y]) => [x + off[0], y + off[1]]) })) });
-}
-console.log("pipeline ms", Date.now() - t0);
-
+// The layers used by the G-code tests: the synthetic leaf → halftone dots, as
+// dots on layer 1-2 and as coral on layers 3-4.
+const leafDots = DH.halftone.dots(base.gray, base.alpha, grid.w, grid.h, grid.p, { grid: "hex", spacing: 2, angle: 45, minD: 0.5, maxD: 1.5, invert: false });
+ok(leafDots.length > 50 && leafDots.every((q) => q.d >= 0.5 && q.d <= 1.5), `synthetic leaf halftone: ${leafDots.length} dots`);
+const print = { nozzle: 0.4, lineWidth: 0.45, layerHeight: 0.2, layersPerLevel: 2, firstLayerZ: 0.2, zOffset: 0, speed: 40, firstSpeed: 15, travelSpeed: 150, firstLayerFlow: 1.1, skipLeveling: true, pauseLayer: 0, bedType: "Textured PEI Plate", retractMinTravel: 2, zHop: 0.4, colourChanges: false };
+const dotOpt = { h: 0.6, flow: 1.2, dwell: 0.3, retract: 1.2, lift: 2, correction: 1 };
+const place = ([x, y]) => [x + 100, y + 100];
+const dotLayerPaths = leafDots.map((q) => ({ pts: [place([q.x, q.y])], type: "Dot", d: q.d, dot: dotOpt }));
+const coralPaths = (dots, maxThread) => DH.halftone.coralChains(dots, maxThread).map((c) => (c.length === 1
+  ? { pts: [place([c[0].x, c[0].y])], type: "Dot", d: c[0].d, dot: dotOpt, keepOrder: true }
+  : { pts: c.map((q) => place([q.x, q.y])), ds: c.map((q) => q.d), knots: c.map(() => 1), d: c[0].d, type: "Coral", dot: dotOpt, coral: { threadFlow: 0.6 }, keepOrder: true }));
+const coralLayerPaths = coralPaths(leafDots, 6);
+const layers = [dotLayerPaths, dotLayerPaths, coralLayerPaths, coralLayerPaths].map((paths) => ({ colour: 0, paths }));
 const mat = DH.MATERIALS[0];
 
-// Pointillism: every layout gives dots inside the outline; tones change size or density.
+// ---- Coral: serpentine along the grid rows, threads never cross, breaks over
+// the max thread length; printed with no lift or retraction inside a chain.
 {
-  const field = DH.raster.levelField(lv, grid.w, grid.h, 1, grid.p);
-  field.tone = base.gray;
-  for (const dotLayout of ["grid", "hex", "scatter"]) {
-    const flat = DH.stitches.pathsForLayer(field, { pattern: "dots", dotLayout, dotSize: 1, dotSpacing: 1.5, dotTone: false, angle: 0 }, print, 0);
-    const toned = DH.stitches.pathsForLayer(field, { pattern: "dots", dotLayout, dotSize: 1, dotSpacing: 1.5, dotTone: true, angle: 0 }, print, 0);
-    const inside = flat.every((q) => q.type === "Dot" && q.pts.length === 1);
-    const varied = dotLayout === "scatter" ? toned.length !== flat.length : new Set(toned.map((q) => q.d.toFixed(2))).size > 1;
-    ok(flat.length > 50 && inside && varied, `dots ${dotLayout}: ${flat.length} dots, with tones ${toned.length}`);
+  const p = 0.1, w = 300, h = 200;
+  const blobs = new Float32Array(w * h).fill(1);                 // two dark patches 8 mm apart
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const X = x * p, Y = y * p; if ((X > 2 && X < 12 && Y > 2 && Y < 18) || (X > 20 && X < 28 && Y > 2 && Y < 18)) blobs[y * w + x] = 0; }
+  for (const grid of ["square", "hex"]) for (const angle of [0, 45]) {
+    const d = DH.halftone.dots(blobs, null, w, h, p, { grid, spacing: 2, angle, minD: 0.5, maxD: 1.5, invert: false });
+    const chains = DH.halftone.coralChains(d, 6);
+    const segs = [];
+    chains.forEach((c) => c.forEach((q, i) => { if (i) segs.push([c[i - 1], q]); }));
+    const cross = (a, b, c, e) => { const o = (p1, q1, r1) => (q1.x - p1.x) * (r1.y - p1.y) - (q1.y - p1.y) * (r1.x - p1.x); return o(a, b, c) * o(a, b, e) < -1e-9 && o(c, e, a) * o(c, e, b) < -1e-9; };
+    let crossings = 0;
+    for (let i = 0; i < segs.length; i++) for (let j = i + 1; j < segs.length; j++) if (cross(segs[i][0], segs[i][1], segs[j][0], segs[j][1])) crossings++;
+    const longest = Math.max(...segs.map(([a, b]) => Math.hypot(a.x - b.x, a.y - b.y)));
+    const all = chains.reduce((n, c) => n + c.length, 0);
+    ok(crossings === 0 && longest <= 6 + 1e-9 && all === d.length && chains.length >= 2,
+      `coral ${grid} grid at ${angle}°: ${d.length} dots in ${chains.length} chains, no crossings, longest thread ${longest.toFixed(2)} mm (max 6)`);
   }
-  const dotsPaths = DH.stitches.pathsForLayer(field, { pattern: "dots", dotLayout: "hex", dotSize: 1, dotSpacing: 1.5, dotTone: true, angle: 0 }, print, 0)
-    .map((q) => ({ ...q, pts: q.pts.map(([x, y]) => [x + 100, y + 100]) }));
-  const r = DH.gcode.build({ name: "dots", printer: DH.PRINTERS[0], material: mat, print, layers: [{ colour: 0, paths: dotsPaths }, { colour: 0, paths: dotsPaths }], colours: [{ name: "a" }] });
-  const body = r.text.split("; MACHINE_START_GCODE_END")[1].split("; MACHINE_END_GCODE_START")[0];
-  const xyExtrude = body.split("\n").filter((l) => /^G1 X[^E]* E[\d.]/.test(l)).length;
-  // Each dot: rising push (Z + E, no XY), dwell, retraction, then a lift.
-  const L = body.split("\n");
-  let blobs = 0, sequenced = 0;
-  for (let i = 0; i < L.length; i++) {
-    if (/^G1 Z[\d.]+ E[\d.]+ F/.test(L[i])) {
-      blobs++;
-      if (/^G4 P/.test(L[i + 1]) && /^G1 E-/.test(L[i + 2]) && /^G1 Z/.test(L[i + 3])) sequenced++;
-    }
+  const rowsOK = (() => { const d = DH.halftone.dots(blobs, null, w, h, p, { grid: "square", spacing: 2, angle: 0, minD: 0.5, maxD: 1.5, invert: false });
+    const o = DH.halftone.serpentine(d); let ok2 = true;
+    for (let i = 1; i < o.length; i++) if (o[i].row === o[i - 1].row) { const dir = o[i].row % 2 ? -1 : 1; if ((o[i].col - o[i - 1].col) * dir <= 0) ok2 = false; } else if (o[i].row < o[i - 1].row) ok2 = false;
+    return ok2; })();
+  ok(rowsOK, "coral serpentine: rows in order, alternating direction");
+  const short = DH.halftone.coralChains(DH.halftone.dots(blobs, null, w, h, p, { grid: "square", spacing: 2, angle: 0, minD: 0.5, maxD: 1.5, invert: false }), 1.5);
+  ok(short.every((c) => c.length === 1), "coral: a max thread length below the grid spacing breaks every thread");
+
+  // G-code for one coral layer: inside a chain only extrusion (dots rising in
+  // place, threads moving), no lift, travel or retraction; each knot sized from its dot.
+  const chainPaths = coralPaths(leafDots, 6);
+  const r = DH.gcode.build({ name: "coral", printer: DH.PRINTERS[1], material: mat, print: { ...print, firstLayerFlow: 1 }, layers: [{ colour: 0, paths: chainPaths }], colours: [{ name: "a" }] });
+  const body = r.text.split("; MACHINE_START_GCODE_END")[1].split("; MACHINE_END_GCODE_START")[0].split("\n");
+  let inChain = false, travelInside = 0, retractInside = 0, chainsSeen = 0, threads = 0;
+  const knotE = [];
+  for (const l of body) {
+    if (/^;TYPE:/.test(l)) continue;
+    if (!inChain && /^G1 Z[\d.]+ E[\d.]+ F/.test(l)) { inChain = true; chainsSeen++; knotE.push(+/E([\d.]+)/.exec(l)[1]); continue; }
+    if (!inChain) continue;
+    if (/^G1 E-/.test(l)) { inChain = false; continue; }
+    if (/^G1 Z[\d.]+ E[\d.]+ F/.test(l)) knotE.push(+/E([\d.]+)/.exec(l)[1]);
+    if (/^G1 X[\d.]+ Y[\d.]+( Z[\d.]+)? E[\d.]+/.test(l)) threads++;
+    if (/^G1 X[\d.]+ Y[\d.]+( Z[\d.]+)? F/.test(l) || /^G1 Z[\d.]+ F/.test(l)) travelInside++;
   }
-  const e1 = /^G1 Z[\d.]+ E([\d.]+)/m.exec(body);
-  ok(r.stats.dots === dotsPaths.length * 2 && xyExtrude === 0 && blobs === r.stats.dots && sequenced === blobs,
-    `dots g-code: ${r.stats.dots} dots, ${sequenced} with push → dwell → retract → lift, ${xyExtrude} moving extrusions, first blob E ${e1 && e1[1]}, ${r.stats.filamentG.toFixed(2)} g`);
+  const coralChainsN = chainPaths.filter((q) => q.type === "Coral").length, singles = chainPaths.length - coralChainsN;
+  const sizes = chainPaths.filter((q) => q.type === "Coral").flatMap((q) => q.ds);
+  const expectRatio = (Math.max(...sizes) / Math.min(...sizes)) ** 2, gotRatio = Math.max(...knotE) / Math.min(...knotE);
+  ok(chainsSeen === chainPaths.length && travelInside === 0 && threads > 0 && r.stats.knots === sizes.length && Math.abs(gotRatio / expectRatio - 1) < 0.05,
+    `coral g-code: ${coralChainsN} chains + ${singles} lone dots, ${threads} threads, 0 travel/lift inside a chain, knot extrusion follows each dot's size (×${gotRatio.toFixed(2)} largest/smallest)`);
 }
+
 for (const pr of DH.PRINTERS) {
   try {
-    const r = DH.gcode.build({ name: "test", printer: pr, material: mat, print, layers, colours: [{ name: "moss" }, { name: "ochre" }] });
+    const r = DH.gcode.build({ name: "test", printer: pr, material: mat, print, layers, colours: [{ name: "moss" }] });
     const unresolved = /\{[a-z_]|\[[a-z_]+\]/.test(r.text.split("; EXECUTABLE_BLOCK_START")[1]);
     ok(!unresolved, `${pr.id}: start/end rendered, ${r.text.length} bytes, leveling lines removed ${r.stats.levelingRemoved}, pauses ${r.stats.pauses.length}, ${r.stats.filamentG.toFixed(2)} g, ${Math.round(r.stats.time)} s`);
     ok(r.stats.levelingRemoved > 0, `${pr.id}: bed leveling stripped`);
@@ -164,7 +150,7 @@ for (const pr of DH.PRINTERS) {
 // the nozzle is inside; colour-change pauses and the end lift clear the wall.
 {
   const a1 = DH.PRINTERS.find((p) => p.id === "a1");
-  const r = DH.gcode.build({ name: "frame", printer: a1, material: mat, print, layers, colours: [{ name: "a" }, { name: "b" }],
+  const r = DH.gcode.build({ name: "frame", printer: a1, material: mat, print: { ...print, pauseLayer: 2 }, layers, colours: [{ name: "a" }],
     frame: { safeZ: 12, height: 10, pauseToPlace: true } });
   const body = r.text.split("; MACHINE_START_GCODE_END")[1];
   const lines = body.split("\n");
@@ -176,8 +162,8 @@ for (const pr of DH.PRINTERS) {
   }
   ok(sawPlacePause, "frame: pause to lay fabric and magnets after the start routine");
   ok(firstLowXY >= 12, "frame: first XY move into the frame happens at Z " + firstLowXY);
-  const pauseLift = /PAUSE_PRINT: change filament[^\n]*\nG1 Z([\d.]+)/.exec(body);
-  ok(pauseLift && +pauseLift[1] >= 12, "frame: colour-change pause lifts to Z " + (pauseLift && pauseLift[1]));
+  const pauseLift = /PAUSE_PRINT: pause before layer[^\n]*\nG1 Z([\d.]+)/.exec(body);
+  ok(pauseLift && +pauseLift[1] >= 12, "frame: a pause lifts to Z " + (pauseLift && pauseLift[1]));
   ok(/FRAME: lift clear of the magnets before the end routine/.test(body), "frame: lifts before the end routine");
 }
 
@@ -200,64 +186,12 @@ for (const pr of DH.PRINTERS) {
   ok(okStack && steps.every((d) => d === 0.6), `dots stack: layer starts ${starts.join(" → ")} mm, never below the dots underneath`);
 }
 
-// Coral: one polyline per shape, inside it, never crossing itself, knots apart;
-// printed with no travel or retraction inside a line.
-{
-  const field = DH.raster.levelField(lv, grid.w, grid.h, 1, grid.p);
-  field.tone = base.gray;
-  const st = { pattern: "coral", dotSize: 1.2, coralSpacing: 2, coralSep: 2.4, coralSteps: 200, coralSeed: 3, dotTone: true, coralKnotEvery: 1,
-    coralThreadFlow: 0.6, dotHeight: 0.6, dotFlow: 1.2, dotDwell: 0.3, dotRetract: 1.2, dotLift: 2 };
-  const t0 = Date.now();
-  const g = DH.coral.grower(field, DH.stitches.coralOptions(st));
-  g.step(st.coralSteps);
-  const grownMs = Date.now() - t0;
-  const lines = g.lines, res = g.result();
-  const at = (x, y) => field.sdf[Math.round(grid.h - y / grid.p - 0.5) * grid.w + Math.round(x / grid.p - 0.5)];
-  const inside = lines.every((L) => L.every(([x, y]) => at(x, y) >= 0.6 - grid.p));
-  let closest = Infinity;
-  for (const L of res.map((r) => r.pts)) for (let i = 0; i < L.length; i++) for (let j = i + 4; j < L.length; j++) closest = Math.min(closest, Math.hypot(L[i][0] - L[j][0], L[i][1] - L[j][1]));
-  const growth = lines.reduce((a, L) => a + L.length, 0);
-  ok(lines.length >= 1 && growth > 100 && inside && DH.coral.crossings(lines) === 0 && DH.coral.crossings(res.map((r) => r.pts)) === 0 && closest >= 1.2,
-    `coral growth: ${lines.length} lines, ${growth} points in ${grownMs} ms, inside, no crossings, knots ≥ ${closest.toFixed(2)} mm apart`);
-
-  const paths = DH.stitches.coralPaths(res, st).map((q) => ({ ...q, pts: q.pts.map(([x, y]) => [x + 100, y + 100]) }));
-  const r = DH.gcode.build({ name: "coral", printer: DH.PRINTERS[1], material: mat, print, layers: [{ colour: 0, paths }, { colour: 0, paths }], colours: [{ name: "a" }] });
-  const body = r.text.split("; MACHINE_START_GCODE_END")[1].split("; MACHINE_END_GCODE_START")[0].split("\n");
-  // walk each coral line: from its first knot push to its final retraction. A
-  // retraction mid-line would split it, so linesSeen === lines printed also
-  // proves there is no retraction inside a line.
-  let inLine = false, travelInside = 0, linesSeen = 0;
-  for (let i = 0; i < body.length; i++) {
-    const l = body[i];
-    if (!inLine && /^G1 Z[\d.]+ E[\d.]+ F/.test(l)) { inLine = true; linesSeen++; continue; }
-    if (inLine && /^G1 E-/.test(l)) { inLine = false; continue; }
-    if (inLine && /^G1 X[\d.]+ Y[\d.]+( Z[\d.]+)? F/.test(l)) travelInside++;
-    if (inLine && /^G1 Z[\d.]+ F/.test(l)) travelInside++;
-  }
-  const expectedKnots = 2 * res.reduce((a, q) => a + q.knots.reduce((x, y) => x + y, 0), 0);
-  ok(linesSeen === 2 * paths.length && travelInside === 0 && r.stats.knots === expectedKnots && r.stats.extrudeLen > 0,
-    `coral g-code: ${linesSeen} lines, ${r.stats.knots} knots, ${travelInside} travel moves inside lines, no retraction inside a line, ${Math.round(r.stats.extrudeLen)} mm of thread`);
-
-  // Higher level: the parts of the same line inside the smaller field, so every
-  // knot there sits on a knot of the level below.
-  const f2 = DH.raster.levelField(lv, grid.w, grid.h, 2, grid.p);
-  const upper = DH.coral.clip(res, f2, 0.2); // small margin: level-2 ridges of the test maze are narrow
-  const below = new Set(res.flatMap((q) => q.pts.filter((_, i) => q.knots[i]).map((v) => v.join(","))));
-  const stacked = upper.every((q) => q.pts.every((v, i) => !q.knots[i] || below.has(v.join(","))));
-  ok(upper.length > 0 && stacked, `coral level 2 reuses level 1's line: ${upper.length} pieces, every knot on a knot below`);
-
-  const every3 = DH.coral.grower(field, DH.stitches.coralOptions({ ...st, coralKnotEvery: 3 }));
-  every3.step(st.coralSteps);
-  const r3 = every3.result(), pts3 = r3.reduce((a, q) => a + q.pts.length, 0), k3 = r3.reduce((a, q) => a + q.knots.reduce((x, y) => x + y, 0), 0);
-  ok(Math.abs(k3 - pts3 / 3) <= r3.length * 2, `coral knots every 3 points: ${k3} knots on ${pts3} points`);
-}
-
 // A2L: the per-layer Y acceleration limit follows Bambu Studio's rule
 // min(max Y acceleration, max Y force / (bed mass + printed mass)).
 {
   const a2l = DH.PRINTERS.find((p) => p.id === "a2l");
   const lim = DH.gcode.yAccelLimit;
-  const r = DH.gcode.build({ name: "a2l", printer: a2l, material: mat, print, layers, colours: [{ name: "a" }, { name: "b" }] });
+  const r = DH.gcode.build({ name: "a2l", printer: a2l, material: mat, print, layers, colours: [{ name: "a" }] });
   const perLayer = (r.text.match(/^M201 N1 Y(\d+)/gm) || []).length;
   ok(a2l && a2l.bed[0] === 330 && a2l.bed[1] === 320 && lim(a2l, 0) === 8000 && lim(a2l, 1000) === Math.round(29e6 / 3700) && perLayer === r.stats.layers,
     `A2L: 330 × 320 mm bed, Y acceleration 8000 empty and ${lim(a2l, 1000)} with 1 kg printed, limit written on all ${perLayer} layers`);

@@ -10,6 +10,12 @@
 
   // Nearest-neighbour ordering. Closed loops may start at any vertex,
   // open paths may be reversed.
+  function polylineLength(pts) {
+    let l = 0;
+    for (let i = 1; i < pts.length; i++) l += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    return l;
+  }
+
   // Nearest-neighbour order for single dots, with a grid so it stays fast for
   // tens of thousands of dots: from each dot, go to the closest one not yet
   // printed (searching outwards ring by ring).
@@ -51,7 +57,7 @@
   function orderPaths(paths, start) {
     if (paths.length && paths.every((p) => p.type === "Dot" && !p.keepOrder)) return orderDots(paths, start);
     // Dots arrive already in serpentine order (there can be tens of thousands).
-    if (paths.length && paths.every((p) => p.keepOrder)) return paths.map((p) => ({ pts: p.pts, type: p.type, d: p.d, dot: p.dot, coral: p.coral, knots: p.knots }));
+    if (paths.length && paths.every((p) => p.keepOrder)) return paths.map((p) => ({ pts: p.pts, type: p.type, d: p.d, ds: p.ds, dot: p.dot, coral: p.coral, knots: p.knots }));
     const left = paths.slice();
     const out = [];
     let cx = start[0], cy = start[1];
@@ -75,9 +81,9 @@
       let pts;
       if (p.closed) pts = p.pts.slice(bestIdx).concat(p.pts.slice(0, bestIdx + 1));
       else pts = bestRev ? p.pts.slice().reverse() : p.pts;
-      // a coral line printed backwards keeps its knots on the same points
-      const knots = p.knots && !p.closed && bestRev ? p.knots.slice().reverse() : p.knots;
-      out.push({ pts, type: p.type, d: p.d, dot: p.dot, coral: p.coral, knots });
+      // a coral line printed backwards keeps its knots (and their sizes) on the same points
+      const rev = (a) => (a && !p.closed && bestRev ? a.slice().reverse() : a);
+      out.push({ pts, type: p.type, d: p.d, ds: rev(p.ds), dot: p.dot, coral: p.coral, knots: rev(p.knots) });
       const last = pts[pts.length - 1];
       cx = last[0]; cy = last[1];
     }
@@ -192,7 +198,8 @@
     // A dot's volume: a disc of its diameter and the dot height. The size
     // correction (from the dot calibration) scales the diameter the printer is
     // asked for, so the volume scales with its square.
-    const dotVolume = (p, flowMul) => { const o = dotOpts(p); return Math.PI * (((p.d || s.lineWidth) * o.correction) / 2) ** 2 * o.h * o.flow * flowMul; };
+    // d: this knot's own diameter (coral knots each have their halftone size)
+    const dotVolume = (p, flowMul, d) => { const o = dotOpts(p); return Math.PI * (((d || p.d || s.lineWidth) * o.correction) / 2) ** 2 * o.h * o.flow * flowMul; };
     // Push the blob out no faster than 3 mm³/s (or the material's limit) and over at least 0.2 s.
     const dotPushTime = (vol) => Math.max(0.2, vol / Math.min(3, m.maxVolSpeed));
     // lift from the dot top, descend during the travel, short final drop, rise while pushing
@@ -201,8 +208,10 @@
     const threadFlowOf = (p) => (p.coral && Number.isFinite(p.coral.threadFlow) ? p.coral.threadFlow : 0.6);
     const threadSpeed = (p, first) => Math.min(first ? s.firstSpeed : s.speed, m.maxVolSpeed / (s.lineWidth * s.layerHeight * threadFlowOf(p)), printer.maxSpeedXY);
     const coralTime = (p, first) => {
-      const o = dotOpts(p), nKnots = p.knots ? p.knots.reduce((a, b) => a + b, 0) : p.pts.length;
-      return nKnots * (dotPushTime(dotVolume(p, 1)) + o.dwell + o.h / zSpeed) + DH.geom.polylineLength(p.pts, false) / threadSpeed(p, first) + (o.lift + 0.2 + o.h) / zSpeed + 0.1;
+      const o = dotOpts(p);
+      let knotsT = 0;
+      p.pts.forEach((_, i) => { if (!p.knots || p.knots[i]) knotsT += dotPushTime(dotVolume(p, 1, p.ds && p.ds[i])) + o.dwell + o.h / zSpeed; });
+      return knotsT + polylineLength(p.pts) / threadSpeed(p, first) + (o.lift + 0.2 + o.h) / zSpeed + 0.1;
     };
     const firstBox = bbox(layers.slice(0, 1));
     const vars = templateVars({ printer, material: m, print: s, firstBox, maxZ, totalLayers: total });
@@ -220,7 +229,7 @@
       let t = 0, cx = null, cy = null;
       for (const p of ordered) {
         if (cx !== null) t += Math.hypot(p.pts[0][0] - cx, p.pts[0][1] - cy) / s.travelSpeed + 0.15;
-        t += p.type === "Dot" ? dotTime(p) : p.type === "Coral" ? coralTime(p, j === 0) : DH.geom.polylineLength(p.pts, false) / sp;
+        t += p.type === "Dot" ? dotTime(p) : p.type === "Coral" ? coralTime(p, j === 0) : polylineLength(p.pts) / sp;
         const l = p.pts[p.pts.length - 1]; cx = l[0]; cy = l[1];
       }
       t = t * 1.15 + 2; // acceleration and layer-change allowance
@@ -341,11 +350,11 @@
               stats.perColour[key].filamentMm += e;
             }
             if (knots[i]) {
-              const vol = dotVolume(p, flow), e = vol / fArea;
+              const vol = dotVolume(p, flow, p.ds && p.ds[i]), e = vol / fArea;
               emit("G1 Z" + f3(base + rise) + " E" + f5(e) + " F" + Math.max(6, Math.round((rise / dotPushTime(vol)) * 60)));
               if (o.dwell > 0) emit("G4 P" + Math.round(o.dwell * 1000));
               zNow = base + rise;
-              dotList.push(x, y, p.d);
+              dotList.push(x, y, (p.ds && p.ds[i]) || p.d);
               stats.knots++;
               stats.perColour[key].filamentMm += e;
             }
